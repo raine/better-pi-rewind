@@ -19,6 +19,7 @@ import {
 } from "../src/file-history.ts";
 import { branchConversation, registerBeforeBranchHandler } from "../src/host-adapter.ts";
 import { RewindSelector, type RewindSelectorItem } from "../src/rewind-selector.ts";
+import { toolInputPaths } from "../src/tool-input-paths.ts";
 import {
 	REWIND_ENTRY_TYPE,
 	REWIND_ENTRY_VERSION,
@@ -147,28 +148,30 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			: current.history.latest();
 		if (!checkpoint) return;
 
-		const inputPath = event.input.path;
-		if (typeof inputPath !== "string") return;
-		const absolutePath = resolve(ctx.cwd, inputPath);
-		const trackingPath = makeTrackingPath(checkpoint.cwd, absolutePath);
-		if (checkpoint.files[trackingPath]) return;
+		const files: CheckpointUpdateRecord["files"] = {};
+		for (const inputPath of toolInputPaths(event.toolName, event.input)) {
+			const absolutePath = resolve(ctx.cwd, inputPath);
+			const trackingPath = makeTrackingPath(checkpoint.cwd, absolutePath);
+			if (checkpoint.files[trackingPath]) continue;
 
-		try {
-			const version = await captureFileVersion(absolutePath, agentDir, current.storeId);
-			const record: CheckpointUpdateRecord = {
-				version: REWIND_ENTRY_VERSION,
-				kind: "update",
-				userEntryId: checkpoint.userEntryId,
-				files: { [trackingPath]: version },
-			};
-			pi.appendEntry(REWIND_ENTRY_TYPE, record);
-			current.history.apply(record);
-		} catch (error) {
-			ctx.ui.notify(
-				`Could not checkpoint ${absolutePath}: ${error instanceof Error ? error.message : String(error)}`,
-				"warning",
-			);
+			try {
+				files[trackingPath] = await captureFileVersion(absolutePath, agentDir, current.storeId);
+			} catch (error) {
+				ctx.ui.notify(
+					`Could not checkpoint ${absolutePath}: ${error instanceof Error ? error.message : String(error)}`,
+					"warning",
+				);
+			}
 		}
+		if (Object.keys(files).length === 0) return;
+		const record: CheckpointUpdateRecord = {
+			version: REWIND_ENTRY_VERSION,
+			kind: "update",
+			userEntryId: checkpoint.userEntryId,
+			files,
+		};
+		pi.appendEntry(REWIND_ENTRY_TYPE, record);
+		current.history.apply(record);
 	});
 
 	registerBeforeBranchHandler(pi, async (event, ctx) => {

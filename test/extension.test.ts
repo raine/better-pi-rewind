@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -113,7 +113,7 @@ test("captures a new file before write and restores it during conversation branc
 			cwd,
 			hasUI: true,
 			ui: {
-				select: async () => "Restore 1 changed file",
+				select: async (_title: string, options: string[]) => options[0],
 				notify: (message: string) => notifications.push(message),
 			},
 			sessionManager: {
@@ -128,14 +128,29 @@ test("captures a new file before write and restores it during conversation branc
 		await mock.emit("message_start", { message: { role: "assistant", content: [] } }, context);
 		assert.equal(mock.appended[0]?.kind, "snapshot");
 
+		const notesPath = join(cwd, "notes.txt");
+		await writeFile(notesPath, "before\n");
+		await mock.emit(
+			"tool_call",
+			{
+				type: "tool_call",
+				toolName: "edit",
+				toolCallId: "tool-omp-edit",
+				input: { input: "[notes.txt#A1B2]\nPUT 1.=1:\n+after" },
+			},
+			context,
+		);
+		assert.equal(mock.appended[1]?.files["notes.txt"]?.backupFileName === null, false);
+		await writeFile(notesPath, "after\n");
+
 		const filePath = join(cwd, "generated.txt");
 		await mock.emit(
 			"tool_call",
 			{ type: "tool_call", toolName: "write", toolCallId: "tool-1", input: { path: "generated.txt", content: "hello" } },
 			context,
 		);
-		assert.equal(mock.appended[1]?.kind, "update");
-		assert.equal(mock.appended[1]?.files["generated.txt"]?.backupFileName, null);
+		assert.equal(mock.appended[2]?.kind, "update");
+		assert.equal(mock.appended[2]?.files["generated.txt"]?.backupFileName, null);
 		await writeFile(filePath, "hello\n");
 
 		const forkResult = await mock.emit(
@@ -145,7 +160,9 @@ test("captures a new file before write and restores it during conversation branc
 		);
 		assert.equal(forkResult, undefined);
 		await assert.rejects(stat(filePath), { code: "ENOENT" });
+		assert.equal(await readFile(notesPath, "utf8"), "before\n");
 		await writeFile(filePath, "hello again\n");
+		await writeFile(notesPath, "after again\n");
 		const branchResult = await mock.emit(
 			"session_before_branch",
 			{ type: "session_before_branch", entryId: "user-entry" },
@@ -153,7 +170,8 @@ test("captures a new file before write and restores it during conversation branc
 		);
 		assert.equal(branchResult, undefined);
 		await assert.rejects(stat(filePath), { code: "ENOENT" });
-		assert.ok(notifications.filter((message) => message.includes("1 file restored")).length >= 2);
+		assert.equal(await readFile(notesPath, "utf8"), "before\n");
+		assert.equal(notifications.filter((message) => message.includes("2 files restored")).length, 2);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
