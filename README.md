@@ -1,4 +1,4 @@
-# pi-rewind
+# better-pi-rewind
 
 Claude Code-style file checkpoints for [pi](https://pi.dev).
 
@@ -11,19 +11,19 @@ earlier user prompt, or do both together.
 Install directly from a local checkout:
 
 ```sh
-pi install /absolute/path/to/pi-rewind
+pi install /absolute/path/to/better-pi-rewind
 ```
 
 Or try it for one run:
 
 ```sh
-pi -e /absolute/path/to/pi-rewind
+pi -e /absolute/path/to/better-pi-rewind
 ```
 
 A published Git repository can be installed with:
 
 ```sh
-pi install git:github.com/OWNER/pi-rewind
+pi install git:github.com/OWNER/better-pi-rewind
 ```
 
 ## Use
@@ -49,7 +49,7 @@ messages by adding this setting to `~/.pi/agent/settings.json`:
 ```
 
 Press Escape twice with an empty editor. After choosing a user message,
-pi-rewind offers to restore the matching code checkpoint before pi creates the
+better-pi-rewind offers to restore the matching code checkpoint before pi creates the
 conversation fork.
 
 Pi uses a 500 ms double-press window. The first Escape keeps its regular cancel
@@ -100,7 +100,7 @@ upstream references include:
 - [Extension API source](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/src/core/extensions/types.ts)
 - [Pi package documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 
-Unlike the upstream Git checkpoint example, pi-rewind uses per-file backups and
+Unlike the upstream Git checkpoint example, better-pi-rewind uses per-file backups and
 tracks file creation and permissions without requiring a Git repository.
 
 ## License

@@ -1,5 +1,5 @@
 {
-  "name": "pi-rewind",
+  "name": "better-pi-rewind",
   "version": "0.1.0",
   "description": "Claude Code-style file checkpoints for pi conversation forks",
   "type": "module",

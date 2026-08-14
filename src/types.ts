@@ -1,4 +1,4 @@
-export const REWIND_ENTRY_TYPE = "pi-rewind.file-history";
+export const REWIND_ENTRY_TYPE = "better-pi-rewind.file-history";
 export const REWIND_ENTRY_VERSION = 1;
 
 export interface FileVersion {

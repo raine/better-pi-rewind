@@ -51,7 +51,7 @@ class MockPi {
 }
 
 test("captures a new file before write and restores it during fork", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-rewind-extension-"));
+	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-extension-"));
 	const cwd = join(root, "project");
 	const agentDir = join(root, "agent");
 	await mkdir(cwd, { recursive: true });

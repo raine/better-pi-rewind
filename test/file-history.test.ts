@@ -15,7 +15,7 @@ import {
 import { REWIND_ENTRY_VERSION, type CheckpointUpdateRecord } from "../src/types.ts";
 
 test("restores modified content and file permissions", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-rewind-"));
+	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-"));
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "project");
 	const filePath = join(cwd, "src", "example.txt");
@@ -42,7 +42,7 @@ test("restores modified content and file permissions", async () => {
 });
 
 test("deletes a file that was absent at the checkpoint", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-rewind-"));
+	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-"));
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "project");
 	const filePath = join(cwd, "generated.txt");
@@ -60,7 +60,7 @@ test("deletes a file that was absent at the checkpoint", async () => {
 });
 
 test("uses the first tracked version for older checkpoints", async () => {
-	const root = await mkdtemp(join(tmpdir(), "pi-rewind-"));
+	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-"));
 	const agentDir = join(root, "agent");
 	const cwd = join(root, "project");
 	const filePath = join(cwd, "existing.txt");
