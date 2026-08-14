@@ -1,0 +1,44 @@
+{
+  "name": "pi-rewind",
+  "version": "0.1.0",
+  "description": "Claude Code-style file checkpoints for pi conversation forks",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./extensions/rewind.ts",
+      "default": "./extensions/rewind.ts"
+    }
+  },
+  "types": "./extensions/rewind.ts",
+  "files": [
+    "extensions",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "checkpoint",
+    "rewind"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions/rewind.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "^0.84.1",
+    "@types/node": "^22.15.3",
+    "tsx": "^4.20.6",
+    "typescript": "^5.8.3"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/*.test.ts",
+    "check": "npm run typecheck && npm test"
+  }
+}
