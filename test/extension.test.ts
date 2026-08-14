@@ -50,6 +50,40 @@ class MockPi {
 	}
 }
 
+test("turns double Escape into the rewind command", async () => {
+	const mock = new MockPi([]);
+	rewindExtension(mock as unknown as ExtensionAPI);
+	let terminalInputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
+	let editorText = "";
+	const context = {
+		cwd: "/tmp/project",
+		mode: "tui",
+		hasUI: true,
+		isIdle: () => true,
+		ui: {
+			onTerminalInput: (handler: typeof terminalInputHandler) => {
+				terminalInputHandler = handler;
+				return () => {};
+			},
+			getEditorText: () => editorText,
+			setEditorText: (text: string) => {
+				editorText = text;
+			},
+		},
+		sessionManager: {
+			getEntries: () => [],
+			getBranch: () => [],
+			getSessionId: () => "session-shortcut",
+		},
+	};
+
+	await mock.emit("session_start", { type: "session_start", reason: "startup" }, context);
+	assert.ok(terminalInputHandler);
+	assert.equal(terminalInputHandler(""), undefined);
+	assert.deepEqual(terminalInputHandler(""), { data: "\r" });
+	assert.equal(editorText, "/rewind");
+});
+
 test("captures a new file before write and restores it during fork", async () => {
 	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-extension-"));
 	const cwd = join(root, "project");

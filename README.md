@@ -39,21 +39,21 @@ then offers:
 
 ### Double Escape
 
-Pi already has a double-Escape fork selector. Configure it to select user
-messages by adding this setting to `~/.pi/agent/settings.json`:
+Press Escape twice within 500 ms with an empty editor. The extension opens its
+rewind selector with every user prompt, the code changes that would be restored,
+and a current-position marker. The same selector is available through `/rewind`.
+
+Set Pi's built-in double-Escape action to `none` so the extension owns this
+interaction:
 
 ```json
 {
-  "doubleEscapeAction": "fork"
+  "doubleEscapeAction": "none"
 }
 ```
 
-Press Escape twice with an empty editor. After choosing a user message,
-better-pi-rewind offers to restore the matching code checkpoint before pi creates the
-conversation fork.
-
-Pi uses a 500 ms double-press window. The first Escape keeps its regular cancel
-behavior while a response or Bash command is active.
+The first Escape retains Pi's cancel behavior while an assistant response is
+active. Selecting an earlier prompt opens the restore action menu.
 
 ## How checkpoints work
 

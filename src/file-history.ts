@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { chmod, copyFile, mkdir, stat, unlink } from "node:fs/promises";
+import { chmod, copyFile, mkdir, readFile, stat, unlink } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
 	REWIND_ENTRY_TYPE,
@@ -25,6 +25,8 @@ export interface CaptureResult {
 
 export interface DiffResult {
 	changedFiles: string[];
+	additions: number;
+	deletions: number;
 	errors: Array<{ path: string; error: string }>;
 }
 
@@ -248,24 +250,90 @@ export async function fileDiffers(filePath: string, version: FileVersion, agentD
 	return currentHash !== backupHash;
 }
 
+export interface LineChanges {
+	additions: number;
+	deletions: number;
+}
+
+function textLines(text: string): string[] {
+	if (text.length === 0) return [];
+	const lines = text.replace(/\r\n/g, "\n").split("\n");
+	if (lines.at(-1) === "") lines.pop();
+	return lines;
+}
+
+export function countLineChanges(beforeText: string, afterText: string): LineChanges {
+	if (beforeText === afterText) return { additions: 0, deletions: 0 };
+	const before = textLines(beforeText);
+	const after = textLines(afterText);
+	const furthest = new Map<number, number>([[1, 0]]);
+	const maximumDistance = before.length + after.length;
+
+	for (let distance = 0; distance <= maximumDistance; distance += 1) {
+		for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+			const down = furthest.get(diagonal + 1) ?? -1;
+			const right = (furthest.get(diagonal - 1) ?? -1) + 1;
+			let x = diagonal === -distance || (diagonal !== distance && right < down) ? down : right;
+			let y = x - diagonal;
+			while (x < before.length && y < after.length && before[x] === after[y]) {
+				x += 1;
+				y += 1;
+			}
+			furthest.set(diagonal, x);
+			if (x >= before.length && y >= after.length) {
+				return {
+					additions: (distance + after.length - before.length) / 2,
+					deletions: (distance + before.length - after.length) / 2,
+				};
+			}
+		}
+	}
+	return { additions: after.length, deletions: before.length };
+}
+
+async function readCurrentText(filePath: string): Promise<string> {
+	try {
+		return await readFile(filePath, "utf8");
+	} catch (error) {
+		if (isNotFound(error)) return "";
+		throw error;
+	}
+}
+
+async function readVersionText(version: FileVersion, agentDir: string): Promise<string> {
+	const backupPath = resolveBackupPath(agentDir, version);
+	return backupPath ? readFile(backupPath, "utf8") : "";
+}
+
 export async function getCheckpointDiff(
 	history: CheckpointHistory,
 	checkpoint: Checkpoint,
 	agentDir: string,
 ): Promise<DiffResult> {
 	const changedFiles: string[] = [];
+	let additions = 0;
+	let deletions = 0;
 	const errors: DiffResult["errors"] = [];
 	for (const trackingPath of history.getTrackedPaths()) {
 		const version = history.getVersion(checkpoint, trackingPath);
 		if (!version) continue;
 		const filePath = resolveTrackingPath(checkpoint.cwd, trackingPath);
 		try {
-			if (await fileDiffers(filePath, version, agentDir)) changedFiles.push(filePath);
+			if (await fileDiffers(filePath, version, agentDir)) {
+				changedFiles.push(filePath);
+				const [beforeText, afterText] = await Promise.all([
+					readVersionText(version, agentDir),
+					readCurrentText(filePath),
+				]);
+				const changes = countLineChanges(beforeText, afterText);
+				additions += changes.additions;
+				deletions += changes.deletions;
+			}
 		} catch (error) {
 			errors.push({ path: filePath, error: errorMessage(error) });
 		}
 	}
-	return { changedFiles, errors };
+	return { changedFiles, additions, deletions, errors };
 }
 
 async function restoreFile(filePath: string, version: FileVersion, agentDir: string): Promise<boolean> {

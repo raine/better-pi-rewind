@@ -6,6 +6,7 @@ import test from "node:test";
 import {
 	CheckpointHistory,
 	captureFileVersion,
+	countLineChanges,
 	createSnapshotRecord,
 	getCheckpointDiff,
 	isCheckpointRecord,
@@ -32,6 +33,8 @@ test("restores modified content and file permissions", async () => {
 	await chmod(filePath, 0o600);
 	const diff = await getCheckpointDiff(history, history.get("user-1")!, agentDir);
 	assert.deepEqual(diff.changedFiles, [filePath]);
+	assert.equal(diff.additions, 1);
+	assert.equal(diff.deletions, 1);
 	assert.deepEqual(diff.errors, []);
 
 	const result = await restoreCheckpoint(history, history.get("user-1")!, agentDir);
@@ -84,6 +87,15 @@ test("uses the first tracked version for older checkpoints", async () => {
 	const result = await restoreCheckpoint(history, history.get("user-old")!, agentDir);
 	assert.deepEqual(result.changedFiles, [filePath]);
 	assert.equal(await readFile(filePath, "utf8"), "original\n");
+});
+
+test("counts inserted, deleted, and replaced lines", () => {
+	assert.deepEqual(countLineChanges("a\nb\nc\n", "a\nnew\nc\nextra\n"), {
+		additions: 2,
+		deletions: 1,
+	});
+	assert.deepEqual(countLineChanges("", "one\ntwo\n"), { additions: 2, deletions: 0 });
+	assert.deepEqual(countLineChanges("one\ntwo\n", ""), { additions: 0, deletions: 2 });
 });
 
 test("rejects backup paths that escape checkpoint storage", () => {
