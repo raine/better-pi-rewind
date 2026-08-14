@@ -17,6 +17,7 @@ import {
 	recordsFromEntries,
 	restoreCheckpoint,
 } from "../src/file-history.ts";
+import { branchConversation, registerBeforeBranchHandler } from "../src/host-adapter.ts";
 import { RewindSelector, type RewindSelectorItem } from "../src/rewind-selector.ts";
 import {
 	REWIND_ENTRY_TYPE,
@@ -64,7 +65,7 @@ function notifyErrors(ctx: ExtensionContext, errors: Array<{ path: string; error
 export default function rewindExtension(pi: ExtensionAPI): void {
 	const agentDir = getAgentDir();
 	let state: RuntimeState | undefined;
-	let suppressForkPromptFor: string | undefined;
+	let suppressBranchPromptFor: string | undefined;
 	let removeTerminalInputListener: (() => void) | undefined;
 	let lastEscapeTime = 0;
 	let rewindUiOpen = false;
@@ -170,10 +171,9 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("session_before_fork", async (event, ctx) => {
-		if (event.position !== "before") return;
-		if (suppressForkPromptFor === event.entryId) {
-			suppressForkPromptFor = undefined;
+	registerBeforeBranchHandler(pi, async (event, ctx) => {
+		if (suppressBranchPromptFor === event.entryId) {
+			suppressBranchPromptFor = undefined;
 			return;
 		}
 		const current = getState(ctx);
@@ -187,9 +187,9 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		const choice = await ctx.ui.select("Restore code with conversation?", [
 			`Restore ${count} changed ${count === 1 ? "file" : "files"}`,
 			"Keep current code",
-			"Cancel fork",
+			"Cancel branch",
 		]);
-		if (choice === "Cancel fork" || choice === undefined) return { cancel: true };
+		if (choice === "Cancel branch" || choice === undefined) return { cancel: true };
 		if (choice === "Keep current code") return;
 
 		const result = await restoreCheckpoint(current.history, checkpoint, agentDir);
@@ -266,17 +266,17 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			}
 			if (!restoreConversation) return;
 
-			suppressForkPromptFor = selected.entry.id;
-			const result = await ctx.fork(selected.entry.id, {
-				position: "before",
-				withSession: async (next) => {
-					next.ui.setEditorText(selected.prompt);
-					const suffix = restoreResult ? ` and ${resultMessage(restoreResult)}` : "";
-					next.ui.notify(`Conversation rewound${suffix}`, restoreResult?.errors.length ? "warning" : "info");
-				},
-			});
+			suppressBranchPromptFor = selected.entry.id;
+			const suffix = restoreResult ? ` and ${resultMessage(restoreResult)}` : "";
+			const result = await branchConversation(
+				ctx,
+				selected.entry.id,
+				selected.prompt,
+				`Conversation rewound${suffix}`,
+				restoreResult?.errors.length ? "warning" : "info",
+			);
 			if (result.cancelled) {
-				suppressForkPromptFor = undefined;
+				suppressBranchPromptFor = undefined;
 				ctx.ui.notify("Conversation rewind was cancelled", "warning");
 			}
 		} finally {

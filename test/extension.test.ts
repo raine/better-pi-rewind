@@ -84,7 +84,7 @@ test("turns double Escape into the rewind command", async () => {
 	assert.equal(editorText, "/rewind");
 });
 
-test("captures a new file before write and restores it during fork", async () => {
+test("captures a new file before write and restores it during conversation branching", async () => {
 	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-extension-"));
 	const cwd = join(root, "project");
 	const agentDir = join(root, "agent");
@@ -145,7 +145,15 @@ test("captures a new file before write and restores it during fork", async () =>
 		);
 		assert.equal(forkResult, undefined);
 		await assert.rejects(stat(filePath), { code: "ENOENT" });
-		assert.ok(notifications.some((message) => message.includes("1 file restored")));
+		await writeFile(filePath, "hello again\n");
+		const branchResult = await mock.emit(
+			"session_before_branch",
+			{ type: "session_before_branch", entryId: "user-entry" },
+			context,
+		);
+		assert.equal(branchResult, undefined);
+		await assert.rejects(stat(filePath), { code: "ENOENT" });
+		assert.ok(notifications.filter((message) => message.includes("1 file restored")).length >= 2);
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
