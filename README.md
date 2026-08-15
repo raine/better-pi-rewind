@@ -7,6 +7,8 @@ The extension records the state of files changed through the host's built-in
 `edit` and `write` tools. Rewinding can restore those files, branch the
 conversation to an earlier user prompt, or do both together.
 
+![Rewind selector showing file diff statistics](https://raw.githubusercontent.com/raine/better-pi-rewind/main/meta/rewind-selector.webp)
+
 ## Install
 
 Install the published package from npm.
