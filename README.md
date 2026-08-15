@@ -131,8 +131,9 @@ conversation branching. Useful upstream references include:
 - [OMP legacy Pi compatibility loader](https://github.com/can1357/oh-my-pi/blob/main/packages/coding-agent/src/extensibility/plugins/legacy-pi-compat.ts)
 - [Pi package documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md)
 
-Unlike the upstream Git checkpoint example, better-pi-rewind uses per-file backups and
-tracks file creation and permissions without requiring a Git repository.
+Unlike [pi-rewind](https://github.com/arpagon/pi-rewind), better-pi-rewind uses
+per-file backups and tracks file creation and permissions without requiring a
+Git repository.
 
 ## License
 
