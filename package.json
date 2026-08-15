@@ -61,9 +61,13 @@
     "tsx": "^4.20.6",
     "typescript": "^5.8.3"
   },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test": "tsx --test test/*.test.ts",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "prepublishOnly": "npm run check"
   }
 }

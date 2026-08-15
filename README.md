@@ -9,39 +9,41 @@ conversation to an earlier user prompt, or do both together.
 
 ## Install
 
+Install the published package from npm.
+
 ### Pi
 
-Install directly from a local checkout:
-
 ```sh
-pi install /absolute/path/to/better-pi-rewind
-```
-
-Or try it for one run:
-
-```sh
-pi -e /absolute/path/to/better-pi-rewind
+pi install npm:better-pi-rewind
 ```
 
 ### OMP
 
-Link a local checkout:
+```sh
+omp plugin install better-pi-rewind
+```
+
+Both hosts can also install a tagged GitHub release directly:
 
 ```sh
+pi install git:github.com/OWNER/better-pi-rewind@v0.2.1
+omp plugin install github:OWNER/better-pi-rewind#v0.2.1
+```
+
+### Local development
+
+Load a checkout while developing the extension:
+
+```sh
+pi install /absolute/path/to/better-pi-rewind
 omp plugin link /absolute/path/to/better-pi-rewind
 ```
 
-Or try it for one run:
+Try the checkout for one run without installing it:
 
 ```sh
+pi -e /absolute/path/to/better-pi-rewind
 omp -e /absolute/path/to/better-pi-rewind/extensions/rewind.ts
-```
-
-A published Git repository can be installed by either host. For example:
-
-```sh
-pi install git:github.com/OWNER/better-pi-rewind
-omp plugin install github:OWNER/better-pi-rewind
 ```
 
 ## Use
