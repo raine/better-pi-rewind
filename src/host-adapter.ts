@@ -21,13 +21,7 @@ interface OmpCommandContext {
 }
 
 interface PiCommandContext {
-	fork(
-		entryId: string,
-		options: {
-			position: "before";
-			withSession: (ctx: { ui: ExtensionContext["ui"] }) => Promise<void>;
-		},
-	): Promise<BranchResult>;
+	navigateTree(entryId: string): Promise<BranchResult>;
 }
 
 type BeforeBranchHandler = (
@@ -52,7 +46,7 @@ export function registerBeforeBranchHandler(pi: ExtensionAPI, handler: BeforeBra
 	events.on("session_before_branch", handler);
 }
 
-export async function branchConversation(
+export async function rewindConversation(
 	ctx: ExtensionCommandContext,
 	entryId: string,
 	prompt: string,
@@ -60,20 +54,19 @@ export async function branchConversation(
 	notificationType: "info" | "warning",
 ): Promise<BranchResult> {
 	const candidate = ctx as ExtensionCommandContext & {
-		fork?: PiCommandContext["fork"];
+		navigateTree?: PiCommandContext["navigateTree"];
 		branch?: OmpCommandContext["branch"];
 	};
-	if (typeof candidate.fork === "function") {
-		return candidate.fork(entryId, {
-			position: "before",
-			withSession: async (next) => {
-				next.ui.setEditorText(prompt);
-				next.ui.notify(notification, notificationType);
-			},
-		});
+	if (typeof candidate.navigateTree === "function") {
+		const result = await candidate.navigateTree(entryId);
+		if (!result.cancelled) {
+			ctx.ui.setEditorText(prompt);
+			ctx.ui.notify(notification, notificationType);
+		}
+		return result;
 	}
 	if (typeof candidate.branch === "function") {
 		return candidate.branch(entryId);
 	}
-	throw new Error("The host does not provide a conversation branch API");
+	throw new Error("The host does not provide an in-place conversation navigation API");
 }

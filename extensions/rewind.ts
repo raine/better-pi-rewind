@@ -17,7 +17,7 @@ import {
 	recordsFromEntries,
 	restoreCheckpoint,
 } from "../src/file-history.ts";
-import { branchConversation, registerBeforeBranchHandler } from "../src/host-adapter.ts";
+import { registerBeforeBranchHandler, rewindConversation } from "../src/host-adapter.ts";
 import { RewindSelector, type RewindSelectorItem } from "../src/rewind-selector.ts";
 import { toolInputPaths } from "../src/tool-input-paths.ts";
 import {
@@ -271,17 +271,15 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 
 			suppressBranchPromptFor = selected.entry.id;
 			const suffix = restoreResult ? ` and ${resultMessage(restoreResult)}` : "";
-			const result = await branchConversation(
+			const result = await rewindConversation(
 				ctx,
 				selected.entry.id,
 				selected.prompt,
 				`Conversation rewound${suffix}`,
 				restoreResult?.errors.length ? "warning" : "info",
 			);
-			if (result.cancelled) {
-				suppressBranchPromptFor = undefined;
-				ctx.ui.notify("Conversation rewind was cancelled", "warning");
-			}
+			suppressBranchPromptFor = undefined;
+			if (result.cancelled) ctx.ui.notify("Conversation rewind was cancelled", "warning");
 		} finally {
 			rewindUiOpen = false;
 		}

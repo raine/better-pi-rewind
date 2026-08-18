@@ -5,8 +5,8 @@ import type {
 	ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-	branchConversation,
 	registerBeforeBranchHandler,
+	rewindConversation,
 } from "../src/host-adapter.ts";
 
 test("normalizes Pi fork events and OMP branch events", async () => {
@@ -28,26 +28,33 @@ test("normalizes Pi fork events and OMP branch events", async () => {
 	assert.deepEqual(received, ["pi-before", "omp-branch"]);
 });
 
-test("branches conversations through Pi and OMP host APIs", async () => {
+test("navigates Pi conversations in place and uses the OMP branch API", async () => {
 	const notifications: string[] = [];
 	let editorText = "";
+	let piEntryId = "";
+	let forkCalled = false;
 	const piContext = {
-		fork: async (_entryId: string, options: any) => {
-			await options.withSession({
-				ui: {
-					setEditorText: (text: string) => {
-						editorText = text;
-					},
-					notify: (message: string) => notifications.push(message),
-				},
-			});
+		navigateTree: async (entryId: string) => {
+			piEntryId = entryId;
 			return { cancelled: false };
+		},
+		fork: async () => {
+			forkCalled = true;
+			return { cancelled: false };
+		},
+		ui: {
+			setEditorText: (text: string) => {
+				editorText = text;
+			},
+			notify: (message: string) => notifications.push(message),
 		},
 	} as unknown as ExtensionCommandContext;
 	assert.deepEqual(
-		await branchConversation(piContext, "entry-pi", "original prompt", "Conversation rewound", "info"),
+		await rewindConversation(piContext, "entry-pi", "original prompt", "Conversation rewound", "info"),
 		{ cancelled: false },
 	);
+	assert.equal(piEntryId, "entry-pi");
+	assert.equal(forkCalled, false);
 	assert.equal(editorText, "original prompt");
 	assert.deepEqual(notifications, ["Conversation rewound"]);
 
@@ -59,7 +66,7 @@ test("branches conversations through Pi and OMP host APIs", async () => {
 		},
 	} as unknown as ExtensionCommandContext;
 	assert.deepEqual(
-		await branchConversation(ompContext, "entry-omp", "unused prompt", "unused notification", "info"),
+		await rewindConversation(ompContext, "entry-omp", "unused prompt", "unused notification", "info"),
 		{ cancelled: false },
 	);
 	assert.equal(ompEntryId, "entry-omp");

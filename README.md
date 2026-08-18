@@ -4,8 +4,8 @@ Claude Code-style file checkpoints for [pi](https://pi.dev) and
 [OMP](https://omp.sh).
 
 The extension records the state of files changed through the host's built-in
-`edit` and `write` tools. Rewinding can restore those files, branch the
-conversation to an earlier user prompt, or do both together.
+`edit` and `write` tools. Rewinding can restore those files, navigate the
+current conversation to an earlier user prompt, or do both together.
 
 ![Rewind selector showing file diff statistics](https://raw.githubusercontent.com/raine/better-pi-rewind/main/meta/rewind-selector.webp)
 
@@ -94,7 +94,7 @@ is active. Selecting an earlier prompt opens the restore action menu.
 3. A missing file is represented explicitly, allowing rewind to remove files
    created by `write`.
 4. Checkpoint metadata is stored as custom entries in the host's session JSONL.
-   It follows the conversation when the host branches or resumes a session.
+   It follows the conversation tree when the host navigates or resumes a session.
 5. Backup files live under the active host's agent directory:
    `~/.pi/agent/file-history/<session-id>/` for Pi and
    `~/.omp/agent/file-history/<session-id>/` for OMP. Host profiles and agent
@@ -115,7 +115,7 @@ prompt captures its current state regardless of how it changed.
 
 Restoration is best-effort per file. A failure is reported while restoration of
 other tracked files continues. Code restoration runs before conversation
-forking, so the combined operation is sequential rather than transactional.
+navigation, so the combined operation is sequential rather than transactional.
 
 ## Development
 
