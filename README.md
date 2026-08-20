@@ -32,22 +32,6 @@ pi install git:github.com/raine/better-pi-rewind@v0.1.0
 omp plugin install github:raine/better-pi-rewind#v0.1.0
 ```
 
-### Local development
-
-Load a checkout while developing the extension:
-
-```sh
-pi install /absolute/path/to/better-pi-rewind
-omp plugin link /absolute/path/to/better-pi-rewind
-```
-
-Try the checkout for one run without installing it:
-
-```sh
-pi -e /absolute/path/to/better-pi-rewind
-omp -e /absolute/path/to/better-pi-rewind/extensions/rewind.ts
-```
-
 ## Use
 
 Run `/rewind` and select the point before an earlier user prompt. The extension
@@ -118,6 +102,22 @@ other tracked files continues. Code restoration runs before conversation
 navigation, so the combined operation is sequential rather than transactional.
 
 ## Development
+
+Load a checkout while developing the extension:
+
+```sh
+pi install /absolute/path/to/better-pi-rewind
+omp plugin link /absolute/path/to/better-pi-rewind
+```
+
+Try the checkout for one run without installing it:
+
+```sh
+pi -e /absolute/path/to/better-pi-rewind
+omp -e /absolute/path/to/better-pi-rewind/extensions/rewind.ts
+```
+
+Install dependencies and run the checks:
 
 ```sh
 npm install
