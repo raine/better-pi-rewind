@@ -66,8 +66,9 @@ For OMP, run:
 omp config set doubleEscapeAction none
 ```
 
-The first Escape retains the host's cancel behavior while an assistant response
-is active. Selecting an earlier prompt opens the restore action menu.
+While an assistant response is active, press Escape twice within 500 ms to
+cancel it. The first Escape is consumed to prevent accidental interruption.
+Selecting an earlier prompt opens the restore action menu.
 
 ## How checkpoints work
 

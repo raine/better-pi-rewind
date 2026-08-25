@@ -55,11 +55,12 @@ test("turns double Escape into the rewind command", async () => {
 	rewindExtension(mock as unknown as ExtensionAPI);
 	let terminalInputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
 	let editorText = "";
+	let idle = true;
 	const context = {
 		cwd: "/tmp/project",
 		mode: "tui",
 		hasUI: true,
-		isIdle: () => true,
+		isIdle: () => idle,
 		ui: {
 			onTerminalInput: (handler: typeof terminalInputHandler) => {
 				terminalInputHandler = handler;
@@ -82,6 +83,11 @@ test("turns double Escape into the rewind command", async () => {
 	assert.equal(terminalInputHandler(""), undefined);
 	assert.deepEqual(terminalInputHandler(""), { data: "\r" });
 	assert.equal(editorText, "/rewind");
+
+	idle = false;
+	editorText = "";
+	assert.deepEqual(terminalInputHandler(""), { consume: true });
+	assert.equal(terminalInputHandler(""), undefined);
 });
 
 test("captures a new file before write and restores it during conversation branching", async () => {

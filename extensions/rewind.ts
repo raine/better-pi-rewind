@@ -69,6 +69,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 	let suppressBranchPromptFor: string | undefined;
 	let removeTerminalInputListener: (() => void) | undefined;
 	let lastEscapeTime = 0;
+	let lastEscapeWasActive = false;
 	let rewindUiOpen = false;
 
 	function rebuildState(ctx: ExtensionContext): RuntimeState {
@@ -92,15 +93,38 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		rebuildState(ctx);
 		removeTerminalInputListener?.();
 		lastEscapeTime = 0;
+		lastEscapeWasActive = false;
 		if (ctx.mode !== "tui") return;
 		removeTerminalInputListener = ctx.ui.onTerminalInput((data) => {
-			if (data !== "" || rewindUiOpen || !ctx.isIdle() || ctx.ui.getEditorText().trim()) {
-				if (data !== "") lastEscapeTime = 0;
+			if (data !== "") {
+				lastEscapeTime = 0;
 				return undefined;
 			}
+			if (rewindUiOpen) {
+				lastEscapeTime = 0;
+				return undefined;
+			}
+
 			const now = Date.now();
-			if (now - lastEscapeTime >= 500) {
+			const active = !ctx.isIdle();
+			const isDoubleEscape = now - lastEscapeTime < 500 && lastEscapeWasActive === active;
+			if (active) {
+				if (isDoubleEscape) {
+					lastEscapeTime = 0;
+					return undefined;
+				}
 				lastEscapeTime = now;
+				lastEscapeWasActive = true;
+				return { consume: true };
+			}
+
+			if (ctx.ui.getEditorText().trim()) {
+				lastEscapeTime = 0;
+				return undefined;
+			}
+			if (!isDoubleEscape) {
+				lastEscapeTime = now;
+				lastEscapeWasActive = false;
 				return undefined;
 			}
 			lastEscapeTime = 0;
