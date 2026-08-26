@@ -28,8 +28,8 @@ omp plugin install better-pi-rewind
 Both hosts can also install a tagged GitHub release directly:
 
 ```sh
-pi install git:github.com/raine/better-pi-rewind@v0.1.1
-omp plugin install github:raine/better-pi-rewind#v0.1.1
+pi install git:github.com/raine/better-pi-rewind@v0.2.0
+omp plugin install github:raine/better-pi-rewind#v0.2.0
 ```
 
 ## Use
