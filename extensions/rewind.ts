@@ -1,4 +1,5 @@
 import {
+	CONFIG_DIR_NAME,
 	getAgentDir,
 	isToolCallEventType,
 	type ExtensionAPI,
@@ -7,6 +8,7 @@ import {
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { resolve } from "node:path";
+import { DEFAULT_REWIND_CONFIG, loadRewindConfig, type RewindConfig } from "../src/config.ts";
 import {
 	CheckpointHistory,
 	captureFileVersion,
@@ -71,6 +73,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 	let lastEscapeTime = 0;
 	let lastEscapeWasActive = false;
 	let rewindUiOpen = false;
+	let config: RewindConfig = DEFAULT_REWIND_CONFIG;
 
 	function rebuildState(ctx: ExtensionContext): RuntimeState {
 		const history = new CheckpointHistory(recordsFromEntries(ctx.sessionManager.getEntries()));
@@ -94,6 +97,18 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		removeTerminalInputListener?.();
 		lastEscapeTime = 0;
 		lastEscapeWasActive = false;
+		try {
+			config = await loadRewindConfig({
+				agentDir,
+				cwd: ctx.cwd,
+				configDirName: CONFIG_DIR_NAME,
+				projectTrusted: ctx.isProjectTrusted(),
+			});
+		} catch (error) {
+			config = DEFAULT_REWIND_CONFIG;
+			const message = error instanceof Error ? error.message : "invalid configuration";
+			ctx.ui.notify(`better-pi-rewind: ${message}`, "warning");
+		}
 		if (ctx.mode !== "tui") return;
 		removeTerminalInputListener = ctx.ui.onTerminalInput((data) => {
 			if (data !== "") {
@@ -107,8 +122,12 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 
 			const now = Date.now();
 			const active = !ctx.isIdle();
-			const isDoubleEscape = now - lastEscapeTime < 500 && lastEscapeWasActive === active;
+			const isDoubleEscape = now - lastEscapeTime < config.escapeWindowMs && lastEscapeWasActive === active;
 			if (active) {
+				if (config.activeRunEscapePresses === 1) {
+					lastEscapeTime = 0;
+					return undefined;
+				}
 				if (isDoubleEscape) {
 					lastEscapeTime = 0;
 					return undefined;

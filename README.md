@@ -66,9 +66,32 @@ For OMP, run:
 omp config set doubleEscapeAction none
 ```
 
-While an assistant response is active, press Escape twice within 500 ms to
-cancel it. The first Escape is consumed to prevent accidental interruption.
-Selecting an earlier prompt opens the restore action menu.
+While an assistant response is active, Escape retains the host's normal
+single-press cancellation behavior. Selecting an earlier prompt opens the
+restore action menu.
+
+### Configuration
+
+Create `better-pi-rewind.json` in the host's agent directory for user-wide
+settings. For Pi this is normally `~/.pi/agent/better-pi-rewind.json`; for OMP
+it is normally `~/.omp/agent/better-pi-rewind.json`.
+
+```json
+{
+  "activeRunEscapePresses": 1,
+  "escapeWindowMs": 500
+}
+```
+
+`activeRunEscapePresses` accepts `1` or `2`. Set it to `2` to guard against
+accidental interruption by requiring two presses. `escapeWindowMs` accepts an
+integer from 50 to 5000 and controls both active cancellation and idle rewind
+detection. The defaults are `1` press and 500 ms.
+
+A trusted project can override either setting in
+`.pi/better-pi-rewind.json` for Pi or `.omp/better-pi-rewind.json` for OMP.
+Project settings take precedence over user settings. Run `/reload` after
+editing a configuration file.
 
 ## How checkpoints work
 

@@ -51,43 +51,53 @@ class MockPi {
 }
 
 test("turns double Escape into the rewind command", async () => {
-	const mock = new MockPi([]);
-	rewindExtension(mock as unknown as ExtensionAPI);
-	let terminalInputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
-	let editorText = "";
-	let idle = true;
-	const context = {
-		cwd: "/tmp/project",
-		mode: "tui",
-		hasUI: true,
-		isIdle: () => idle,
-		ui: {
-			onTerminalInput: (handler: typeof terminalInputHandler) => {
-				terminalInputHandler = handler;
-				return () => {};
-			},
-			getEditorText: () => editorText,
-			setEditorText: (text: string) => {
-				editorText = text;
-			},
-		},
-		sessionManager: {
-			getEntries: () => [],
-			getBranch: () => [],
-			getSessionId: () => "session-shortcut",
-		},
-	};
+	const agentDir = await mkdtemp(join(tmpdir(), "better-pi-rewind-shortcut-"));
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
 
-	await mock.emit("session_start", { type: "session_start", reason: "startup" }, context);
-	assert.ok(terminalInputHandler);
-	assert.equal(terminalInputHandler(""), undefined);
-	assert.deepEqual(terminalInputHandler(""), { data: "\r" });
-	assert.equal(editorText, "/rewind");
+	try {
+		const mock = new MockPi([]);
+		rewindExtension(mock as unknown as ExtensionAPI);
+		let terminalInputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
+		let editorText = "";
+		let idle = true;
+		const context = {
+			cwd: "/tmp/project",
+			mode: "tui",
+			hasUI: true,
+			isIdle: () => idle,
+			isProjectTrusted: () => false,
+			ui: {
+				onTerminalInput: (handler: typeof terminalInputHandler) => {
+					terminalInputHandler = handler;
+					return () => {};
+				},
+				getEditorText: () => editorText,
+				setEditorText: (text: string) => {
+					editorText = text;
+				},
+				notify: () => {},
+			},
+			sessionManager: {
+				getEntries: () => [],
+				getBranch: () => [],
+				getSessionId: () => "session-shortcut",
+			},
+		};
 
-	idle = false;
-	editorText = "";
-	assert.deepEqual(terminalInputHandler(""), { consume: true });
-	assert.equal(terminalInputHandler(""), undefined);
+		await mock.emit("session_start", { type: "session_start", reason: "startup" }, context);
+		assert.ok(terminalInputHandler);
+		assert.equal(terminalInputHandler(""), undefined);
+		assert.deepEqual(terminalInputHandler(""), { data: "\r" });
+		assert.equal(editorText, "/rewind");
+
+		idle = false;
+		editorText = "";
+		assert.equal(terminalInputHandler(""), undefined);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
 });
 
 test("captures a new file before write and restores it during conversation branching", async () => {
@@ -117,7 +127,9 @@ test("captures a new file before write and restores it during conversation branc
 		const notifications: string[] = [];
 		const context = {
 			cwd,
+			mode: "print",
 			hasUI: true,
+			isProjectTrusted: () => false,
 			ui: {
 				select: async (_title: string, options: string[]) => options[0],
 				notify: (message: string) => notifications.push(message),
