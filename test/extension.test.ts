@@ -1,13 +1,26 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import rewindExtension from "../extensions/rewind.ts";
 import { REWIND_ENTRY_TYPE, type CheckpointRecord } from "../src/types.ts";
 
 type Handler = (event: any, context: any) => Promise<any> | any;
+
+function git(cwd: string, ...args: string[]): Promise<string> {
+	return new Promise((resolve, reject) => {
+		execFile("git", ["-C", cwd, ...args], { encoding: "utf8" }, (error, stdout, stderr) => {
+			if (error) {
+				reject(new Error(String(stderr).trim() || error.message));
+				return;
+			}
+			resolve(String(stdout).trim());
+		});
+	});
+}
 
 class MockPi {
 	readonly handlers = new Map<string, Handler[]>();
@@ -94,6 +107,112 @@ test("turns double Escape into the rewind command", async () => {
 		idle = false;
 		editorText = "";
 		assert.equal(terminalInputHandler(""), undefined);
+	} finally {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	}
+});
+
+test("resets descendant commits before restoring code and conversation", async () => {
+	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-extension-git-"));
+	const cwd = join(root, "project");
+	const agentDir = join(root, "agent");
+	await mkdir(cwd, { recursive: true });
+	await git(cwd, "init", "--initial-branch=main");
+	await git(cwd, "config", "user.name", "Rewind Test");
+	await git(cwd, "config", "user.email", "rewind@example.test");
+	const filePath = join(cwd, "example.txt");
+	await writeFile(filePath, "committed base\n");
+	await git(cwd, "add", "example.txt");
+	await git(cwd, "commit", "-m", "initial");
+	const checkpointHead = await git(cwd, "rev-parse", "HEAD");
+	await writeFile(filePath, "before\n");
+
+	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = agentDir;
+	try {
+		const userMessage = {
+			role: "user" as const,
+			content: [{ type: "text" as const, text: "change and commit the file" }],
+			timestamp: Date.now(),
+		};
+		const userEntry = {
+			type: "message",
+			id: "user-git",
+			parentId: null,
+			timestamp: new Date().toISOString(),
+			message: userMessage,
+		} as SessionEntry;
+		const entries = [userEntry];
+		const mock = new MockPi(entries);
+		rewindExtension(mock as unknown as ExtensionAPI);
+		const notifications: string[] = [];
+		const menuOptions: string[][] = [];
+		let navigatedTo = "";
+		let editorText = "";
+		const theme = {
+			bold: (text: string) => text,
+			fg: (_color: string, text: string) => text,
+		} as Theme;
+		const context = {
+			cwd,
+			mode: "tui",
+			hasUI: true,
+			isIdle: () => true,
+			isProjectTrusted: () => false,
+			waitForIdle: async () => {},
+			navigateTree: async (entryId: string) => {
+				navigatedTo = entryId;
+				return { cancelled: false };
+			},
+			ui: {
+				onTerminalInput: () => () => {},
+				getEditorText: () => editorText,
+				setEditorText: (text: string) => {
+					editorText = text;
+				},
+				notify: (message: string) => notifications.push(message),
+				confirm: async () => true,
+				select: async (_title: string, options: string[]) => {
+					menuOptions.push(options);
+					return options.find((option) => option.includes("and reset"));
+				},
+				custom: async (factory: (...args: any[]) => any) => {
+					let selected: unknown;
+					const component = factory({}, theme, {}, (value: unknown) => {
+						selected = value;
+					});
+					component.handleInput("\u001b[A");
+					component.handleInput("\r");
+					return selected;
+				},
+			},
+			sessionManager: {
+				getEntries: () => entries,
+				getBranch: () => entries,
+				getSessionId: () => "session-git-reset",
+			},
+		};
+
+		await mock.emit("session_start", { type: "session_start", reason: "startup" }, context);
+		await mock.emit("message_end", { message: userMessage }, context);
+		await mock.emit("message_start", { message: { role: "assistant", content: [] } }, context);
+		await mock.emit(
+			"tool_call",
+			{ type: "tool_call", toolName: "edit", toolCallId: "tool-git-edit", input: { path: "example.txt" } },
+			context,
+		);
+		await writeFile(filePath, "after\n");
+		await git(cwd, "commit", "-am", "agent commit");
+
+		await mock.commands.get("rewind")?.handler("", context);
+
+		assert.equal(await git(cwd, "rev-parse", "HEAD"), checkpointHead);
+		assert.equal(await readFile(filePath, "utf8"), "before\n");
+		assert.equal(navigatedTo, "user-git");
+		assert.equal(editorText, "change and commit the file");
+		assert.ok(menuOptions.some((options) => options.includes("Restore code and conversation, and reset 1 commit")));
+		assert.ok(notifications.includes("1 commit reset"));
 	} finally {
 		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;

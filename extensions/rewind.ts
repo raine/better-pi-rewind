@@ -19,8 +19,15 @@ import {
 	recordsFromEntries,
 	restoreCheckpoint,
 } from "../src/file-history.ts";
+import {
+	captureGitCheckpoint,
+	getGitResetPlan,
+	resetGitCommits,
+	type GitResetPlan,
+} from "../src/git-history.ts";
 import { registerBeforeBranchHandler, rewindConversation } from "../src/host-adapter.ts";
 import { RewindSelector, type RewindSelectorItem } from "../src/rewind-selector.ts";
+import { buildRestoreActions } from "../src/restore-actions.ts";
 import { toolInputPaths } from "../src/tool-input-paths.ts";
 import {
 	REWIND_ENTRY_TYPE,
@@ -58,6 +65,10 @@ function resultMessage(result: RestoreResult): string {
 	return result.errors.length === 0 ? restored : `${restored}, ${result.errors.length} failed`;
 }
 
+function commitResetMessage(count: number): string {
+	return `${count} ${count === 1 ? "commit" : "commits"} reset`;
+}
+
 function notifyErrors(ctx: ExtensionContext, errors: Array<{ path: string; error: string }>, action: string): void {
 	if (errors.length === 0) return;
 	const first = errors[0];
@@ -90,6 +101,26 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 	function getState(ctx: ExtensionContext): RuntimeState {
 		if (!state || state.storeId !== ctx.sessionManager.getSessionId()) return rebuildState(ctx);
 		return state;
+	}
+
+	async function resetCheckpointCommits(
+		ctx: ExtensionContext,
+		plan: Extract<GitResetPlan, { kind: "available" }>,
+	): Promise<number | undefined> {
+		const count = plan.commitCount;
+		const confirmed = await ctx.ui.confirm(
+			`Hard-reset ${count} ${count === 1 ? "commit" : "commits"}?`,
+			"This runs git reset --hard. Uncommitted working tree and index changes may be discarded. Checkpointed files are restored afterward.",
+		);
+		if (!confirmed) return undefined;
+		try {
+			const resetCount = await resetGitCommits(plan, ctx.cwd);
+			ctx.ui.notify(commitResetMessage(resetCount), "info");
+			return resetCount;
+		} catch (error) {
+			ctx.ui.notify(`Git reset failed: ${error instanceof Error ? error.message : String(error)}`, "error");
+			return undefined;
+		}
 	}
 
 	pi.on("session_start", async (_event, ctx) => {
@@ -170,13 +201,11 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			return;
 		}
 
-		const captured = await captureTrackedFiles(
-			current.history.getTrackedPaths(),
-			ctx.cwd,
-			agentDir,
-			current.storeId,
-		);
-		const record = createSnapshotRecord(entry.id, prompt, ctx.cwd, captured.files);
+		const [captured, git] = await Promise.all([
+			captureTrackedFiles(current.history.getTrackedPaths(), ctx.cwd, agentDir, current.storeId),
+			captureGitCheckpoint(ctx.cwd),
+		]);
+		const record = createSnapshotRecord(entry.id, prompt, ctx.cwd, captured.files, git);
 		pi.appendEntry(REWIND_ENTRY_TYPE, record);
 		current.history.apply(record);
 		current.currentCheckpointId = entry.id;
@@ -226,18 +255,32 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		const checkpoint = current.history.get(event.entryId);
 		if (!checkpoint || !ctx.hasUI) return;
 
-		const diff = await getCheckpointDiff(current.history, checkpoint, agentDir);
-		notifyErrors(ctx, diff.errors, "Checkpoint comparison");
-		if (diff.changedFiles.length === 0) return;
-		const count = diff.changedFiles.length;
-		const choice = await ctx.ui.select("Restore code with conversation?", [
-			`Restore ${count} changed ${count === 1 ? "file" : "files"}`,
-			"Keep current code",
-			"Cancel branch",
+		const [diff, gitPlan] = await Promise.all([
+			getCheckpointDiff(current.history, checkpoint, agentDir),
+			getGitResetPlan(checkpoint.git, ctx.cwd),
 		]);
-		if (choice === "Cancel branch" || choice === undefined) return { cancel: true };
-		if (choice === "Keep current code") return;
+		notifyErrors(ctx, diff.errors, "Checkpoint comparison");
+		const fileCount = diff.changedFiles.length;
+		const commitCount = gitPlan.kind === "available" ? gitPlan.commitCount : 0;
+		if (fileCount === 0 && commitCount === 0) return;
 
+		const files = `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`;
+		const commits = `${commitCount} ${commitCount === 1 ? "commit" : "commits"}`;
+		const restoreFiles = `Restore ${files}`;
+		const restoreAndReset = `Restore ${files} and reset ${commits}`;
+		const resetOnly = `Reset ${commits}`;
+		const choices = fileCount > 0
+			? [restoreFiles, ...(commitCount > 0 ? [restoreAndReset] : []), "Keep current code", "Cancel branch"]
+			: [resetOnly, "Keep current code and commits", "Cancel branch"];
+		const choice = await ctx.ui.select("Restore code with conversation?", choices);
+		if (choice === "Cancel branch" || choice === undefined) return { cancel: true };
+		if (choice === "Keep current code" || choice === "Keep current code and commits") return;
+
+		const resetCommits = choice === restoreAndReset || choice === resetOnly;
+		if (resetCommits && gitPlan.kind === "available") {
+			const resetCount = await resetCheckpointCommits(ctx, gitPlan);
+			if (resetCount === undefined) return { cancel: true };
+		}
 		const result = await restoreCheckpoint(current.history, checkpoint, agentDir);
 		ctx.ui.notify(resultMessage(result), result.errors.length === 0 ? "info" : "warning");
 		notifyErrors(ctx, result.errors, "Code restore");
@@ -292,28 +335,37 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			const selected = visibleCandidates.find((candidate) => candidate.entry.id === selectedItem.id);
 			if (!selected) return;
 
-			const diff = await getCheckpointDiff(current.history, selected.checkpoint, agentDir);
+			const [diff, gitPlan] = await Promise.all([
+				getCheckpointDiff(current.history, selected.checkpoint, agentDir),
+				getGitResetPlan(selected.checkpoint.git, ctx.cwd),
+			]);
 			notifyErrors(ctx, diff.errors, "Checkpoint comparison");
-			const count = diff.changedFiles.length;
-			const both = `Restore code and conversation (${count} ${count === 1 ? "file" : "files"})`;
-			const conversation = "Restore conversation only";
-			const code = `Restore code only (${count} ${count === 1 ? "file" : "files"})`;
-			const choices = count > 0 ? [both, conversation, code, "Cancel"] : ["Restore conversation (code already matches)", "Cancel"];
-			const choice = await ctx.ui.select("Choose what to restore", choices);
-			if (!choice || choice === "Cancel") return;
+			const commitCount = gitPlan.kind === "available" ? gitPlan.commitCount : 0;
+			const actions = buildRestoreActions(diff.changedFiles.length, commitCount);
+			const choice = await ctx.ui.select("Choose what to restore", actions.map((action) => action.label));
+			const action = actions.find((candidate) => candidate.label === choice);
+			if (!action || action.cancel) return;
+
+			let resetCount: number | undefined;
+			if (action.resetCommits && gitPlan.kind === "available") {
+				resetCount = await resetCheckpointCommits(ctx, gitPlan);
+				if (resetCount === undefined) return;
+			}
 
 			let restoreResult: RestoreResult | undefined;
-			const restoreCode = choice === both || choice === code;
-			const restoreConversation = choice === both || choice === conversation || choice.startsWith("Restore conversation (");
-			if (restoreCode) {
+			if (action.restoreCode) {
 				restoreResult = await restoreCheckpoint(current.history, selected.checkpoint, agentDir);
 				ctx.ui.notify(resultMessage(restoreResult), restoreResult.errors.length === 0 ? "info" : "warning");
 				notifyErrors(ctx, restoreResult.errors, "Code restore");
 			}
-			if (!restoreConversation) return;
+			if (!action.restoreConversation) return;
 
 			suppressBranchPromptFor = selected.entry.id;
-			const suffix = restoreResult ? ` and ${resultMessage(restoreResult)}` : "";
+			const effects = [
+				...(resetCount === undefined ? [] : [commitResetMessage(resetCount)]),
+				...(restoreResult ? [resultMessage(restoreResult)] : []),
+			];
+			const suffix = effects.length > 0 ? ` and ${effects.join(" and ")}` : "";
 			const result = await rewindConversation(
 				ctx,
 				selected.entry.id,

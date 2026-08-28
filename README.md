@@ -4,8 +4,9 @@ Claude Code-style file checkpoints for [pi](https://pi.dev) and
 [OMP](https://omp.sh).
 
 The extension records the state of files changed through the host's built-in
-`edit` and `write` tools. Rewinding can restore those files, navigate the
-current conversation to an earlier user prompt, or do both together.
+`edit` and `write` tools. Rewinding can restore those files, reset descendant
+Git commits, navigate the current conversation to an earlier user prompt, or
+combine those actions.
 
 ![Rewind selector showing file diff statistics](https://raw.githubusercontent.com/raine/better-pi-rewind/main/meta/rewind-selector.webp)
 
@@ -40,6 +41,12 @@ then offers:
 - Restore code and conversation
 - Restore conversation only
 - Restore code only
+- Restore code with a hard reset of commits created after the checkpoint
+
+Commit reset choices appear when the selected checkpoint and the current state
+use the same Git repository and branch, and the checkpoint commit is an ancestor
+of `HEAD`. The reset choice shows the number of commits it will remove and asks
+for confirmation before running `git reset --hard`.
 
 `/checkpoint` is an alias for `/rewind`.
 
@@ -101,18 +108,22 @@ editing a configuration file.
    copies its current contents into that prompt's checkpoint.
 3. A missing file is represented explicitly, allowing rewind to remove files
    created by `write`.
-4. Checkpoint metadata is stored as custom entries in the host's session JSONL.
+4. Each checkpoint records the Git repository root, branch, and `HEAD` commit
+   when the working directory belongs to a repository with at least one commit.
+5. Checkpoint metadata is stored as custom entries in the host's session JSONL.
    It follows the conversation tree when the host navigates or resumes a session.
-5. Backup files live under the active host's agent directory:
+6. Backup files live under the active host's agent directory:
    `~/.pi/agent/file-history/<session-id>/` for Pi and
    `~/.omp/agent/file-history/<session-id>/` for OMP. Host profiles and agent
    directory overrides change the parent directory along with other host data.
-6. Restore compares existence, mode, size, and content before writing. Matching
+7. Restore compares existence, mode, size, and content before writing. Matching
    files stay untouched, changed files are copied from the backup, and their
    permissions are restored.
 
-This is a filesystem checkpoint system independent of Git. Git branches, the
-index, commits, and repository metadata remain unchanged.
+File-only restore actions leave Git references and the index unchanged. Commit
+reset actions hard-reset the current branch to the checkpoint's `HEAD` before
+restoring checkpointed files. This order lets checkpointed file contents recover
+states that differed from the checkpoint commit.
 
 ## Coverage
 
@@ -122,8 +133,14 @@ changes do not register new files. Once a path enters tracking, each later user
 prompt captures its current state regardless of how it changed.
 
 Restoration is best-effort per file. A failure is reported while restoration of
-other tracked files continues. Code restoration runs before conversation
-navigation, so the combined operation is sequential rather than transactional.
+other tracked files continues. Git reset, code restoration, and conversation
+navigation run sequentially rather than transactionally.
+
+A commit reset overwrites the working tree and index through
+`git reset --hard`, which may also overwrite untracked files. The extension
+reapplies checkpointed files afterward, but changes outside checkpoint coverage
+are not recoverable through the extension. Git's reflog and `ORIG_HEAD` provide
+the standard Git recovery paths for the removed commits.
 
 ## Development
 

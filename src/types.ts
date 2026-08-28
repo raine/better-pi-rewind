@@ -7,6 +7,12 @@ export interface FileVersion {
 	storeId: string;
 }
 
+export interface GitCheckpoint {
+	repositoryRoot: string;
+	head: string;
+	branch: string | null;
+}
+
 export interface CheckpointSnapshotRecord {
 	version: typeof REWIND_ENTRY_VERSION;
 	kind: "snapshot";
@@ -15,6 +21,7 @@ export interface CheckpointSnapshotRecord {
 	cwd: string;
 	timestamp: string;
 	files: Record<string, FileVersion>;
+	git?: GitCheckpoint;
 }
 
 export interface CheckpointUpdateRecord {
@@ -32,6 +39,7 @@ export interface Checkpoint {
 	cwd: string;
 	timestamp: string;
 	files: Record<string, FileVersion>;
+	git?: GitCheckpoint;
 }
 
 export interface RestoreResult {

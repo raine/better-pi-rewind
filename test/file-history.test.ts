@@ -113,6 +113,18 @@ test("rejects backup paths that escape checkpoint storage", () => {
 	);
 });
 
+test("retains valid Git metadata and rejects unsafe commit values", () => {
+	const git = {
+		repositoryRoot: "/tmp/project",
+		head: "a".repeat(40),
+		branch: "refs/heads/main",
+	};
+	const snapshot = createSnapshotRecord("user-1", "prompt", "/tmp/project", {}, git);
+	assert.equal(isCheckpointRecord(snapshot), true);
+	assert.deepEqual(new CheckpointHistory([snapshot]).get("user-1")?.git, git);
+	assert.equal(isCheckpointRecord({ ...snapshot, git: { ...git, head: "--hard" } }), false);
+});
+
 test("ignores duplicate tracking within one checkpoint", async () => {
 	const cwd = "/tmp/project";
 	const snapshot = createSnapshotRecord("user-1", "prompt", cwd, {

@@ -9,6 +9,7 @@ import {
 	type CheckpointRecord,
 	type CheckpointSnapshotRecord,
 	type FileVersion,
+	type GitCheckpoint,
 	type RestoreResult,
 } from "./types.ts";
 
@@ -56,6 +57,19 @@ function isFileVersion(value: unknown): value is FileVersion {
 	);
 }
 
+function isGitCheckpoint(value: unknown): value is GitCheckpoint {
+	if (typeof value !== "object" || value === null) return false;
+	const candidate = value as Partial<GitCheckpoint>;
+	return (
+		typeof candidate.repositoryRoot === "string" &&
+		isAbsolute(candidate.repositoryRoot) &&
+		typeof candidate.head === "string" &&
+		/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(candidate.head) &&
+		(candidate.branch === null ||
+			(typeof candidate.branch === "string" && candidate.branch.startsWith("refs/") && !/[\r\n\0]/.test(candidate.branch)))
+	);
+}
+
 export function isCheckpointRecord(value: unknown): value is CheckpointRecord {
 	if (typeof value !== "object" || value === null) return false;
 	const candidate = value as Partial<CheckpointRecord>;
@@ -73,7 +87,8 @@ export function isCheckpointRecord(value: unknown): value is CheckpointRecord {
 		return (
 			typeof candidate.prompt === "string" &&
 			typeof candidate.cwd === "string" &&
-			typeof candidate.timestamp === "string"
+			typeof candidate.timestamp === "string" &&
+			(candidate.git === undefined || isGitCheckpoint(candidate.git))
 		);
 	}
 	return true;
@@ -107,6 +122,7 @@ export class CheckpointHistory {
 				cwd: record.cwd,
 				timestamp: record.timestamp,
 				files: { ...record.files },
+				...(record.git ? { git: record.git } : {}),
 			};
 			this.checkpoints.set(record.userEntryId, checkpoint);
 			if (!existing) this.order.push(record.userEntryId);
@@ -380,6 +396,7 @@ export function createSnapshotRecord(
 	prompt: string,
 	cwd: string,
 	files: Record<string, FileVersion>,
+	git?: GitCheckpoint,
 ): CheckpointSnapshotRecord {
 	return {
 		version: REWIND_ENTRY_VERSION,
@@ -389,5 +406,6 @@ export function createSnapshotRecord(
 		cwd,
 		timestamp: new Date().toISOString(),
 		files,
+		...(git ? { git } : {}),
 	};
 }
