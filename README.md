@@ -5,8 +5,8 @@ Claude Code-style file checkpoints for [pi](https://pi.dev) and
 
 The extension records the state of files changed through the host's built-in
 `edit` and `write` tools. Rewinding can restore those files, reset descendant
-Git commits, navigate the current conversation to an earlier user prompt, or
-combine those actions.
+Git commits or an amended checkpoint commit, navigate the current conversation
+to an earlier user prompt, or combine those actions.
 
 ![Rewind selector showing file diff statistics](https://raw.githubusercontent.com/raine/better-pi-rewind/main/meta/rewind-selector.webp)
 
@@ -42,11 +42,14 @@ then offers:
 - Restore conversation only
 - Restore code only
 - Restore code with a hard reset of commits created after the checkpoint
+- Restore code and roll back an immediately amended checkpoint commit
 
-Commit reset choices appear when the selected checkpoint and the current state
-use the same Git repository and branch, and the checkpoint commit is an ancestor
-of `HEAD`. The reset choice shows the number of commits it will remove and asks
-for confirmation before running `git reset --hard`.
+Git rollback choices appear when the selected checkpoint and the current state
+use the same repository and branch. Descendant commits can be reset when the
+checkpoint commit is an ancestor of `HEAD`. An amended commit can be rolled back
+when the HEAD reflog shows that it immediately replaced the checkpoint commit.
+The extension describes the detected change and asks for confirmation before
+running `git reset --hard`.
 
 `/checkpoint` is an alias for `/rewind`.
 

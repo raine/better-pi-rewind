@@ -8,12 +8,16 @@ interface GitCommandResult {
 	error?: Error;
 }
 
+export type GitResetTarget =
+	| { kind: "descendant-commits"; commitCount: number }
+	| { kind: "amended-commit" };
+
 export type GitResetPlan =
 	| {
 		kind: "available";
 		checkpoint: GitCheckpoint;
 		currentHead: string;
-		commitCount: number;
+		target: GitResetTarget;
 	}
 	| { kind: "unchanged" }
 	| { kind: "unavailable"; reason: string };
@@ -65,6 +69,30 @@ export async function captureGitCheckpoint(cwd: string): Promise<GitCheckpoint |
 	};
 }
 
+async function wasImmediatelyAmended(
+	repositoryRoot: string,
+	checkpointHead: string,
+	currentHead: string,
+): Promise<boolean> {
+	const reflogResult = await runGit(repositoryRoot, [
+		"reflog",
+		"show",
+		"-2",
+		"--format=%H%x00%gs",
+		"HEAD",
+	]);
+	if (reflogResult.code !== 0) return false;
+	const entries = reflogResult.stdout.trimEnd().split("\n");
+	if (entries.length !== 2) return false;
+	const [latestHead, latestAction] = entries[0]!.replace(/\r$/, "").split("\0", 2);
+	const [previousHead] = entries[1]!.replace(/\r$/, "").split("\0", 1);
+	return (
+		latestHead === currentHead &&
+		previousHead === checkpointHead &&
+		/^commit \(amend\)(?::|$)/.test(latestAction ?? "")
+	);
+}
+
 export async function getGitResetPlan(
 	checkpoint: GitCheckpoint | undefined,
 	cwd: string,
@@ -90,6 +118,14 @@ export async function getGitResetPlan(
 		current.head,
 	]);
 	if (ancestorResult.code === 1) {
+		if (await wasImmediatelyAmended(current.repositoryRoot, checkpoint.head, current.head)) {
+			return {
+				kind: "available",
+				checkpoint,
+				currentHead: current.head,
+				target: { kind: "amended-commit" },
+			};
+		}
 		return { kind: "unavailable", reason: "The checkpoint commit is not an ancestor of HEAD" };
 	}
 	if (ancestorResult.code !== 0) {
@@ -108,10 +144,18 @@ export async function getGitResetPlan(
 	if (!Number.isSafeInteger(commitCount) || commitCount < 1) {
 		return { kind: "unavailable", reason: "Git returned an invalid commit count" };
 	}
-	return { kind: "available", checkpoint, currentHead: current.head, commitCount };
+	return {
+		kind: "available",
+		checkpoint,
+		currentHead: current.head,
+		target: { kind: "descendant-commits", commitCount },
+	};
 }
 
-export async function resetGitCommits(plan: Extract<GitResetPlan, { kind: "available" }>, cwd: string): Promise<number> {
+export async function resetGitCommits(
+	plan: Extract<GitResetPlan, { kind: "available" }>,
+	cwd: string,
+): Promise<GitResetTarget> {
 	if (!GIT_OBJECT_ID.test(plan.checkpoint.head)) throw new Error("The checkpoint Git object ID is invalid");
 	const current = await captureGitCheckpoint(cwd);
 	if (!current) throw new Error("The current directory does not have a Git commit");
@@ -130,5 +174,5 @@ export async function resetGitCommits(plan: Extract<GitResetPlan, { kind: "avail
 		plan.checkpoint.head,
 	]);
 	if (result.code !== 0) throw commandError(result, "Git reset failed");
-	return plan.commitCount;
+	return plan.target;
 }

@@ -24,10 +24,11 @@ import {
 	getGitResetPlan,
 	resetGitCommits,
 	type GitResetPlan,
+	type GitResetTarget,
 } from "../src/git-history.ts";
 import { registerBeforeBranchHandler, rewindConversation } from "../src/host-adapter.ts";
 import { RewindSelector, type RewindSelectorItem } from "../src/rewind-selector.ts";
-import { buildRestoreActions } from "../src/restore-actions.ts";
+import { buildRestoreActions, gitResetActionLabel } from "../src/restore-actions.ts";
 import { toolInputPaths } from "../src/tool-input-paths.ts";
 import {
 	REWIND_ENTRY_TYPE,
@@ -65,7 +66,9 @@ function resultMessage(result: RestoreResult): string {
 	return result.errors.length === 0 ? restored : `${restored}, ${result.errors.length} failed`;
 }
 
-function commitResetMessage(count: number): string {
+function gitResetMessage(target: GitResetTarget): string {
+	if (target.kind === "amended-commit") return "amended commit rolled back";
+	const count = target.commitCount;
 	return `${count} ${count === 1 ? "commit" : "commits"} reset`;
 }
 
@@ -103,20 +106,23 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		return state;
 	}
 
-	async function resetCheckpointCommits(
+	async function resetCheckpointGit(
 		ctx: ExtensionContext,
 		plan: Extract<GitResetPlan, { kind: "available" }>,
-	): Promise<number | undefined> {
-		const count = plan.commitCount;
+	): Promise<GitResetTarget | undefined> {
+		const target = plan.target;
+		const title = target.kind === "amended-commit"
+			? "Roll back amended commit?"
+			: `Hard-reset ${target.commitCount} ${target.commitCount === 1 ? "commit" : "commits"}?`;
 		const confirmed = await ctx.ui.confirm(
-			`Hard-reset ${count} ${count === 1 ? "commit" : "commits"}?`,
+			title,
 			"This runs git reset --hard. Uncommitted working tree and index changes may be discarded. Checkpointed files are restored afterward.",
 		);
 		if (!confirmed) return undefined;
 		try {
-			const resetCount = await resetGitCommits(plan, ctx.cwd);
-			ctx.ui.notify(commitResetMessage(resetCount), "info");
-			return resetCount;
+			const resetTarget = await resetGitCommits(plan, ctx.cwd);
+			ctx.ui.notify(gitResetMessage(resetTarget), "info");
+			return resetTarget;
 		} catch (error) {
 			ctx.ui.notify(`Git reset failed: ${error instanceof Error ? error.message : String(error)}`, "error");
 			return undefined;
@@ -261,25 +267,25 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		]);
 		notifyErrors(ctx, diff.errors, "Checkpoint comparison");
 		const fileCount = diff.changedFiles.length;
-		const commitCount = gitPlan.kind === "available" ? gitPlan.commitCount : 0;
-		if (fileCount === 0 && commitCount === 0) return;
+		const resetTarget = gitPlan.kind === "available" ? gitPlan.target : undefined;
+		if (fileCount === 0 && !resetTarget) return;
 
 		const files = `${fileCount} changed ${fileCount === 1 ? "file" : "files"}`;
-		const commits = `${commitCount} ${commitCount === 1 ? "commit" : "commits"}`;
+		const reset = resetTarget ? gitResetActionLabel(resetTarget) : undefined;
 		const restoreFiles = `Restore ${files}`;
-		const restoreAndReset = `Restore ${files} and reset ${commits}`;
-		const resetOnly = `Reset ${commits}`;
+		const restoreAndReset = reset ? `Restore ${files} and ${reset}` : undefined;
+		const resetOnly = resetTarget ? gitResetActionLabel(resetTarget, true) : undefined;
 		const choices = fileCount > 0
-			? [restoreFiles, ...(commitCount > 0 ? [restoreAndReset] : []), "Keep current code", "Cancel branch"]
-			: [resetOnly, "Keep current code and commits", "Cancel branch"];
+			? [restoreFiles, ...(restoreAndReset ? [restoreAndReset] : []), "Keep current code", "Cancel branch"]
+			: [resetOnly!, "Keep current code and Git history", "Cancel branch"];
 		const choice = await ctx.ui.select("Restore code with conversation?", choices);
 		if (choice === "Cancel branch" || choice === undefined) return { cancel: true };
-		if (choice === "Keep current code" || choice === "Keep current code and commits") return;
+		if (choice === "Keep current code" || choice === "Keep current code and Git history") return;
 
-		const resetCommits = choice === restoreAndReset || choice === resetOnly;
-		if (resetCommits && gitPlan.kind === "available") {
-			const resetCount = await resetCheckpointCommits(ctx, gitPlan);
-			if (resetCount === undefined) return { cancel: true };
+		const resetGit = choice === restoreAndReset || choice === resetOnly;
+		if (resetGit && gitPlan.kind === "available") {
+			const completedReset = await resetCheckpointGit(ctx, gitPlan);
+			if (completedReset === undefined) return { cancel: true };
 		}
 		const result = await restoreCheckpoint(current.history, checkpoint, agentDir);
 		ctx.ui.notify(resultMessage(result), result.errors.length === 0 ? "info" : "warning");
@@ -340,16 +346,16 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 				getGitResetPlan(selected.checkpoint.git, ctx.cwd),
 			]);
 			notifyErrors(ctx, diff.errors, "Checkpoint comparison");
-			const commitCount = gitPlan.kind === "available" ? gitPlan.commitCount : 0;
-			const actions = buildRestoreActions(diff.changedFiles.length, commitCount);
+			const resetTarget = gitPlan.kind === "available" ? gitPlan.target : undefined;
+			const actions = buildRestoreActions(diff.changedFiles.length, resetTarget);
 			const choice = await ctx.ui.select("Choose what to restore", actions.map((action) => action.label));
 			const action = actions.find((candidate) => candidate.label === choice);
 			if (!action || action.cancel) return;
 
-			let resetCount: number | undefined;
-			if (action.resetCommits && gitPlan.kind === "available") {
-				resetCount = await resetCheckpointCommits(ctx, gitPlan);
-				if (resetCount === undefined) return;
+			let completedReset: GitResetTarget | undefined;
+			if (action.resetGit && gitPlan.kind === "available") {
+				completedReset = await resetCheckpointGit(ctx, gitPlan);
+				if (completedReset === undefined) return;
 			}
 
 			let restoreResult: RestoreResult | undefined;
@@ -362,7 +368,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 
 			suppressBranchPromptFor = selected.entry.id;
 			const effects = [
-				...(resetCount === undefined ? [] : [commitResetMessage(resetCount)]),
+				...(completedReset ? [gitResetMessage(completedReset)] : []),
 				...(restoreResult ? [resultMessage(restoreResult)] : []),
 			];
 			const suffix = effects.length > 0 ? ` and ${effects.join(" and ")}` : "";

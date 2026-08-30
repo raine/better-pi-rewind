@@ -49,10 +49,57 @@ test("captures Git state and hard-resets descendant commits", async () => {
 	const plan = await getGitResetPlan(checkpoint, cwd);
 	assert.equal(plan.kind, "available");
 	if (plan.kind !== "available") return;
-	assert.equal(plan.commitCount, 1);
-	assert.equal(await resetGitCommits(plan, cwd), 1);
+	assert.deepEqual(plan.target, { kind: "descendant-commits", commitCount: 1 });
+	assert.deepEqual(await resetGitCommits(plan, cwd), plan.target);
 	assert.equal(await git(cwd, "rev-parse", "HEAD"), checkpoint.head);
 	assert.equal(await readFile(filePath, "utf8"), "before\n");
+});
+
+test("detects an immediately amended checkpoint through the HEAD reflog", async () => {
+	const cwd = await createRepository();
+	const filePath = join(cwd, "example.txt");
+	await writeFile(filePath, "before\n");
+	await git(cwd, "add", "example.txt");
+	await git(cwd, "commit", "-m", "original");
+	const checkpoint = await captureGitCheckpoint(cwd);
+	assert.ok(checkpoint);
+
+	await writeFile(filePath, "amended\n");
+	await git(cwd, "commit", "-am", "amended", "--amend");
+
+	const plan = await getGitResetPlan(checkpoint, cwd);
+	assert.equal(plan.kind, "available");
+	if (plan.kind !== "available") return;
+	assert.deepEqual(plan.target, { kind: "amended-commit" });
+	assert.deepEqual(await resetGitCommits(plan, cwd), plan.target);
+	assert.equal(await git(cwd, "rev-parse", "HEAD"), checkpoint.head);
+	assert.equal(await readFile(filePath, "utf8"), "before\n");
+});
+
+test("does not treat another reflog rewrite as an amended commit", async () => {
+	const cwd = await createRepository();
+	const filePath = join(cwd, "example.txt");
+	await writeFile(filePath, "base\n");
+	await git(cwd, "add", "example.txt");
+	await git(cwd, "commit", "-m", "base");
+	await writeFile(filePath, "before\n");
+	await git(cwd, "commit", "-am", "original");
+	const checkpoint = await captureGitCheckpoint(cwd);
+	assert.ok(checkpoint);
+
+	const replacement = await git(
+		cwd,
+		"commit-tree",
+		`${checkpoint.head}^{tree}`,
+		"-p",
+		`${checkpoint.head}^`,
+		"-m",
+		"replacement",
+	);
+	await git(cwd, "reset", "--hard", replacement);
+
+	const plan = await getGitResetPlan(checkpoint, cwd);
+	assert.equal(plan.kind, "unavailable");
 });
 
 test("offers no reset when HEAD matches and rejects another branch", async () => {
