@@ -7,7 +7,7 @@ import {
 	type ExtensionContext,
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import { resolve } from "node:path";
+import { relative, resolve } from "node:path";
 import { DEFAULT_REWIND_CONFIG, loadRewindConfig, type RewindConfig } from "../src/config.ts";
 import {
 	CheckpointHistory,
@@ -28,7 +28,9 @@ import {
 } from "../src/git-history.ts";
 import { registerBeforeBranchHandler, rewindConversation } from "../src/host-adapter.ts";
 import { RewindSelector, type RewindSelectorItem } from "../src/rewind-selector.ts";
-import { buildRestoreActions, gitResetActionLabel } from "../src/restore-actions.ts";
+import { restoreSummary } from "../src/restore-summary.ts";
+import { RestoreSelector } from "../src/restore-selector.ts";
+import { buildRestoreActions, gitResetActionLabel, type RestoreAction } from "../src/restore-actions.ts";
 import { toolInputPaths } from "../src/tool-input-paths.ts";
 import {
 	REWIND_ENTRY_TYPE,
@@ -59,11 +61,6 @@ function userPrompt(entry: SessionEntry): string | undefined {
 
 function latestUserEntry(entries: readonly SessionEntry[]): SessionEntry | undefined {
 	return [...entries].reverse().find((entry) => userPrompt(entry) !== undefined);
-}
-
-function resultMessage(result: RestoreResult): string {
-	const restored = `${result.changedFiles.length} ${result.changedFiles.length === 1 ? "file" : "files"} restored`;
-	return result.errors.length === 0 ? restored : `${restored}, ${result.errors.length} failed`;
 }
 
 function gitResetMessage(target: GitResetTarget): string {
@@ -288,7 +285,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			if (completedReset === undefined) return { cancel: true };
 		}
 		const result = await restoreCheckpoint(current.history, checkpoint, agentDir);
-		ctx.ui.notify(resultMessage(result), result.errors.length === 0 ? "info" : "warning");
+		ctx.ui.notify(restoreSummary(result, ctx.cwd), result.errors.length === 0 ? "info" : "warning");
 		notifyErrors(ctx, result.errors, "Code restore");
 	});
 
@@ -321,6 +318,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 						id: candidate.entry.id,
 						prompt: candidate.prompt,
 						filesChanged: diff.changedFiles.length,
+						files: diff.changedFiles.map((file) => relative(candidate.checkpoint.cwd, file) || file),
 						additions: diff.additions,
 						deletions: diff.deletions,
 					};
@@ -348,8 +346,23 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			notifyErrors(ctx, diff.errors, "Checkpoint comparison");
 			const resetTarget = gitPlan.kind === "available" ? gitPlan.target : undefined;
 			const actions = buildRestoreActions(diff.changedFiles.length, resetTarget);
-			const choice = await ctx.ui.select("Choose what to restore", actions.map((action) => action.label));
-			const action = actions.find((candidate) => candidate.label === choice);
+			const action = await ctx.ui.custom<RestoreAction | undefined>(
+				(tui, theme, _keybindings, done) => {
+					const selector = new RestoreSelector({
+						prompt: selected.prompt,
+						timestamp: selected.entry.timestamp,
+						files: diff.changedFiles.map((file) => relative(selected.checkpoint.cwd, file) || file),
+						additions: diff.additions,
+						deletions: diff.deletions,
+						comparisonErrors: diff.errors.length,
+					}, actions, theme, done);
+					return {
+						render: (width) => selector.render(width),
+						invalidate: () => selector.invalidate(),
+						handleInput: (data) => { selector.handleInput(data); tui.requestRender(); },
+					};
+				},
+			);
 			if (!action || action.cancel) return;
 
 			let completedReset: GitResetTarget | undefined;
@@ -361,7 +374,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			let restoreResult: RestoreResult | undefined;
 			if (action.restoreCode) {
 				restoreResult = await restoreCheckpoint(current.history, selected.checkpoint, agentDir);
-				ctx.ui.notify(resultMessage(restoreResult), restoreResult.errors.length === 0 ? "info" : "warning");
+				ctx.ui.notify(restoreSummary(restoreResult, ctx.cwd), restoreResult.errors.length === 0 ? "info" : "warning");
 				notifyErrors(ctx, restoreResult.errors, "Code restore");
 			}
 			if (!action.restoreConversation) return;
@@ -369,7 +382,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			suppressBranchPromptFor = selected.entry.id;
 			const effects = [
 				...(completedReset ? [gitResetMessage(completedReset)] : []),
-				...(restoreResult ? [resultMessage(restoreResult)] : []),
+				...(restoreResult ? [restoreSummary(restoreResult, ctx.cwd)] : []),
 			];
 			const suffix = effects.length > 0 ? ` and ${effects.join(" and ")}` : "";
 			const result = await rewindConversation(

@@ -147,7 +147,7 @@ test("resets descendant commits before restoring code and conversation", async (
 		const mock = new MockPi(entries);
 		rewindExtension(mock as unknown as ExtensionAPI);
 		const notifications: string[] = [];
-		const menuOptions: string[][] = [];
+		const menuOptions: string[] = [];
 		let navigatedTo = "";
 		let editorText = "";
 		const theme = {
@@ -174,15 +174,18 @@ test("resets descendant commits before restoring code and conversation", async (
 				notify: (message: string) => notifications.push(message),
 				confirm: async () => true,
 				select: async (_title: string, options: string[]) => {
-					menuOptions.push(options);
+					menuOptions.push(options.join("\n"));
 					return options.find((option) => option.includes("and reset"));
 				},
 				custom: async (factory: (...args: any[]) => any) => {
 					let selected: unknown;
-					const component = factory({}, theme, {}, (value: unknown) => {
+					const component = factory({ requestRender() {} }, theme, {}, (value: unknown) => {
 						selected = value;
 					});
-					component.handleInput("\u001b[A");
+					const output = component.render(120).join("\n");
+					const confirmation = output.includes("Confirm you want");
+					if (confirmation) menuOptions.push(output);
+					component.handleInput(confirmation ? "\u001b[B" : "\u001b[A");
 					component.handleInput("\r");
 					return selected;
 				},

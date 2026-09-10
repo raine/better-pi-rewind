@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { RewindSelector } from "../src/rewind-selector.ts";
 
 const theme = {
@@ -25,4 +26,12 @@ test("renders Claude-style rewind entries and selects current", () => {
 	assert.match(output, /2 files changed \+14 -3/);
 	assert.match(output, /No code changes/);
 	assert.match(output, /❯ \(current\)/);
+});
+
+test("shows relative file names with a bounded overflow summary", () => {
+	const selector = new RewindSelector([
+		{ prompt: "update files", filesChanged: 4, files: ["src/a.ts", "src/b.ts", "c", "d"], additions: 5, deletions: 2 },
+	], theme, () => {});
+	assert.match(selector.render(100).join("\n"), /src\/a.ts, src\/b.ts and 2 more \+5 -2/);
+	assert.ok(selector.render(20).every((line) => visibleWidth(line) <= 20));
 });

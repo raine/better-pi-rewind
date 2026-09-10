@@ -9,6 +9,7 @@ export interface RewindSelectorItem {
 	id?: string;
 	prompt: string;
 	filesChanged: number;
+	files?: string[];
 	additions: number;
 	deletions: number;
 	current?: boolean;
@@ -61,7 +62,7 @@ export class RewindSelector implements Component {
 			if (!item.current) {
 				const stats = item.filesChanged === 0
 					? "No code changes"
-					: `${item.filesChanged} ${item.filesChanged === 1 ? "file" : "files"} changed ${this.theme.fg("success", `+${item.additions}`)} ${this.theme.fg("error", `-${item.deletions}`)}`;
+					: `${item.files?.length ? item.files.slice(0, 2).join(", ") + (item.files.length > 2 ? ` and ${item.files.length - 2} more` : "") : `${item.filesChanged} ${item.filesChanged === 1 ? "file" : "files"} changed`} ${this.theme.fg("success", `+${item.additions}`)} ${this.theme.fg("error", `-${item.deletions}`)}`;
 				lines.push(`  ${this.theme.fg("muted", stats)}`);
 			}
 			lines.push("");
@@ -70,7 +71,7 @@ export class RewindSelector implements Component {
 		if (startIndex > 0 || endIndex < this.items.length) {
 			lines.push(this.theme.fg("muted", `  (${this.selectedIndex + 1}/${this.items.length})`));
 		}
-		return lines;
+		return lines.map((line) => truncateToWidth(line, Math.max(0, width), ""));
 	}
 
 	handleInput(data: string): void {
