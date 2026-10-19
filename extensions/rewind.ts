@@ -14,6 +14,7 @@ import {
 	captureFileVersion,
 	captureTrackedFiles,
 	createSnapshotRecord,
+	expandHomePath,
 	getCheckpointDiff,
 	makeTrackingPath,
 	recordsFromEntries,
@@ -225,7 +226,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 
 		const files: CheckpointUpdateRecord["files"] = {};
 		for (const inputPath of toolInputPaths(event.toolName, event.input)) {
-			const absolutePath = resolve(ctx.cwd, inputPath);
+			const absolutePath = resolve(ctx.cwd, expandHomePath(inputPath));
 			const trackingPath = makeTrackingPath(checkpoint.cwd, absolutePath);
 			if (checkpoint.files[trackingPath]) continue;
 

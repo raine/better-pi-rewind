@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { chmod, mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { tmpdir, homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
@@ -8,9 +8,12 @@ import {
 	captureFileVersion,
 	countLineChanges,
 	createSnapshotRecord,
+	expandHomePath,
 	getCheckpointDiff,
 	isCheckpointRecord,
 	makeTrackingPath,
+	resolveBackupPath,
+	resolveTrackingPath,
 	restoreCheckpoint,
 } from "../src/file-history.ts";
 import { REWIND_ENTRY_VERSION, type CheckpointUpdateRecord } from "../src/types.ts";
@@ -141,4 +144,47 @@ test("ignores duplicate tracking within one checkpoint", async () => {
 
 	assert.deepEqual(history.getTrackedPaths().sort(), ["a.txt", "b.txt"]);
 	assert.equal(history.get("user-1")?.files["b.txt"]?.backupFileName, null);
+});
+
+test("expands home-relative paths before tracking them", () => {
+	const home = homedir();
+	const cwd = join(home, "project");
+
+	assert.equal(expandHomePath("~"), home);
+	assert.equal(expandHomePath("~/notes.txt"), join(home, "notes.txt"));
+	assert.equal(expandHomePath("notes.txt"), "notes.txt");
+	assert.equal(expandHomePath("/var/tmp/notes.txt"), "/var/tmp/notes.txt");
+
+	assert.equal(resolveTrackingPath(cwd, "~/notes.txt"), join(home, "notes.txt"));
+	assert.equal(resolveTrackingPath(cwd, "notes.txt"), join(cwd, "notes.txt"));
+	assert.equal(makeTrackingPath(home, "~/notes.txt"), "notes.txt");
+	assert.equal(makeTrackingPath(cwd, "~/notes.txt"), join(home, "notes.txt"));
+});
+
+test("captures files addressed through a home-relative path", async () => {
+	const root = await mkdtemp(join(tmpdir(), "better-pi-rewind-"));
+	const agentDir = join(root, "agent");
+	const cwd = join(root, "project");
+	await mkdir(cwd, { recursive: true });
+	await writeFile(join(root, "home-file.txt"), "before\n");
+
+	const previousHome = process.env.HOME;
+	const previousUserProfile = process.env.USERPROFILE;
+	process.env.HOME = root;
+	process.env.USERPROFILE = root;
+	try {
+		const trackingPath = makeTrackingPath(cwd, "~/home-file.txt");
+		const version = await captureFileVersion(resolveTrackingPath(cwd, trackingPath), agentDir, "session-1");
+		assert.equal(trackingPath, join(root, "home-file.txt"));
+		assert.notEqual(version.backupFileName, null);
+
+		const backupPath = resolveBackupPath(agentDir, version);
+		assert.ok(backupPath);
+		assert.equal(await readFile(backupPath, "utf8"), "before\n");
+	} finally {
+		if (previousHome === undefined) delete process.env.HOME;
+		else process.env.HOME = previousHome;
+		if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+		else process.env.USERPROFILE = previousUserProfile;
+	}
 });

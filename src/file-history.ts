@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { chmod, copyFile, mkdir, readFile, stat, unlink } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
 	REWIND_ENTRY_TYPE,
@@ -165,8 +166,16 @@ export class CheckpointHistory {
 	}
 }
 
+export function expandHomePath(filePath: string): string {
+	const home = homedir();
+	if (filePath === "~") return home;
+	if (filePath.startsWith("~/")) return join(home, filePath.slice(2));
+	if (process.platform === "win32" && filePath.startsWith("~\\")) return join(home, filePath.slice(2));
+	return filePath;
+}
+
 export function makeTrackingPath(cwd: string, filePath: string): string {
-	const absolutePath = resolve(cwd, filePath);
+	const absolutePath = resolve(cwd, expandHomePath(filePath));
 	const relativePath = relative(cwd, absolutePath);
 	if (relativePath !== "" && relativePath !== ".." && !relativePath.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`)) {
 		return relativePath;
@@ -176,7 +185,8 @@ export function makeTrackingPath(cwd: string, filePath: string): string {
 }
 
 export function resolveTrackingPath(cwd: string, trackingPath: string): string {
-	return isAbsolute(trackingPath) ? trackingPath : resolve(cwd, trackingPath);
+	const filePath = expandHomePath(trackingPath);
+	return isAbsolute(filePath) ? filePath : resolve(cwd, filePath);
 }
 
 function backupDirectory(agentDir: string, storeId: string): string {
