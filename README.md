@@ -98,6 +98,14 @@ accidental interruption by requiring two presses. `escapeWindowMs` accepts an
 integer from 50 to 5000 and controls both active cancellation and idle rewind
 detection. The defaults are `1` press and 500 ms.
 
+An Escape press that the host handles, for example dismissing a command menu or
+cancelling a run, is followed by one quiet window. Repeated dismissal presses
+therefore never open rewind on their own. The extension asks the TUI which
+component receives keyboard input instead of checking component focus flags.
+Menus can receive input without those flags. Menus, overlays, and editor
+autocomplete keep their Escape presses without arming rewind. If keyboard
+ownership is unavailable, use `/rewind` directly instead of double Escape.
+
 A trusted project can override either setting in
 `.pi/better-pi-rewind.json` for Pi or `.omp/better-pi-rewind.json` for OMP.
 Project settings take precedence over user settings. Run `/reload` after

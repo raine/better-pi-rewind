@@ -7,6 +7,7 @@ import {
 	type ExtensionContext,
 	type SessionEntry,
 } from "@earendil-works/pi-coding-agent";
+import { isKeyRelease, isKeyRepeat, matchesKey } from "@earendil-works/pi-tui";
 import { relative, resolve } from "node:path";
 import { DEFAULT_REWIND_CONFIG, loadRewindConfig, type RewindConfig } from "../src/config.ts";
 import {
@@ -38,6 +39,14 @@ import {
 	type CheckpointUpdateRecord,
 	type RestoreResult,
 } from "../src/types.ts";
+
+const FOCUS_PROBE_WIDGET = "better-pi-rewind-focus-probe";
+
+interface EscapeOwner {
+	getText?: unknown;
+	setText?: unknown;
+	isShowingAutocomplete?: () => boolean;
+}
 
 interface RuntimeState {
 	history: CheckpointHistory;
@@ -83,6 +92,8 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 	let removeTerminalInputListener: (() => void) | undefined;
 	let lastEscapeTime = 0;
 	let lastEscapeWasActive = false;
+	let lastHostEscapeTime = 0;
+	let hostOwnsEscape: (() => boolean) | undefined;
 	let rewindUiOpen = false;
 	let config: RewindConfig = DEFAULT_REWIND_CONFIG;
 
@@ -131,6 +142,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		removeTerminalInputListener?.();
 		lastEscapeTime = 0;
 		lastEscapeWasActive = false;
+		lastHostEscapeTime = 0;
 		try {
 			config = await loadRewindConfig({
 				agentDir,
@@ -144,26 +156,55 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			ctx.ui.notify(`better-pi-rewind: ${message}`, "warning");
 		}
 		if (ctx.mode !== "tui") return;
+		// Widget factories expose the TUI; menu owners need not have a focused flag.
+		hostOwnsEscape = undefined;
+		try {
+			ctx.ui.setWidget(FOCUS_PROBE_WIDGET, (tui) => {
+				const focusTui = tui as typeof tui & { getFocusedComponent?: () => EscapeOwner | null };
+				hostOwnsEscape = () => {
+					const owner = focusTui.getFocusedComponent?.();
+					// shortcut: editor methods identify the prompt; use identity if the host exposes it.
+					return !owner || typeof owner.getText !== "function" || typeof owner.setText !== "function"
+						|| tui.hasOverlay() || owner.isShowingAutocomplete?.() === true;
+				};
+				return { render: () => [], invalidate: () => {} };
+			});
+			ctx.ui.setWidget(FOCUS_PROBE_WIDGET, undefined);
+		} catch {
+			hostOwnsEscape = undefined;
+		}
 		removeTerminalInputListener = ctx.ui.onTerminalInput((data) => {
-			if (data !== "") {
+			// Releases and auto-repeat are not presses, but they must not clear a
+			// pending press either: Kitty reports a release between every pair of
+			// presses, so resetting here would make a double press unreachable.
+			if (isKeyRelease(data) || isKeyRepeat(data)) return undefined;
+			if (!matchesKey(data, "escape")) {
 				lastEscapeTime = 0;
 				return undefined;
 			}
-			if (rewindUiOpen) {
+			const now = Date.now();
+			// A press the extension passes on belongs to a single-press host gesture,
+			// such as dismissing a command menu or cancelling a run. Arming a fresh
+			// double press right after one turns a run of dismissal presses into
+			// rewind, so note the time and stay out of the way for one window.
+			const hostHandles = () => {
 				lastEscapeTime = 0;
+				lastHostEscapeTime = now;
+			};
+			if (rewindUiOpen) {
+				hostHandles();
 				return undefined;
 			}
 
-			const now = Date.now();
 			const active = !ctx.isIdle();
 			const isDoubleEscape = now - lastEscapeTime < config.escapeWindowMs && lastEscapeWasActive === active;
 			if (active) {
 				if (config.activeRunEscapePresses === 1) {
-					lastEscapeTime = 0;
+					hostHandles();
 					return undefined;
 				}
 				if (isDoubleEscape) {
-					lastEscapeTime = 0;
+					hostHandles();
 					return undefined;
 				}
 				lastEscapeTime = now;
@@ -171,8 +212,8 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 				return { consume: true };
 			}
 
-			if (ctx.ui.getEditorText().trim()) {
-				lastEscapeTime = 0;
+			if (ctx.ui.getEditorText().trim() || (hostOwnsEscape?.() ?? true) || now - lastHostEscapeTime < config.escapeWindowMs) {
+				hostHandles();
 				return undefined;
 			}
 			if (!isDoubleEscape) {

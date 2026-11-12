@@ -5,7 +5,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
+import { SettingsList } from "@earendil-works/pi-tui";
 import rewindExtension from "../extensions/rewind.ts";
+import { REWIND_CONFIG_FILE } from "../src/config.ts";
 import { REWIND_ENTRY_TYPE, type CheckpointRecord } from "../src/types.ts";
 
 type Handler = (event: any, context: any) => Promise<any> | any;
@@ -63,31 +65,81 @@ class MockPi {
 	}
 }
 
-test("turns double Escape into the rewind command", async () => {
+interface ShortcutHarness {
+	send: (data: string) => { consume?: boolean; data?: string } | undefined;
+	state: {
+		editorText: string;
+		idle: boolean;
+		editorFocused: boolean;
+		menuFocused: boolean;
+		overlayOpen: boolean;
+		autocompleteOpen: boolean;
+		focusApiUnavailable: boolean;
+	};
+	restore: () => void;
+}
+
+async function createShortcutHarness(options: { escapeWindowMs?: number } = {}): Promise<ShortcutHarness> {
 	const agentDir = await mkdtemp(join(tmpdir(), "better-pi-rewind-shortcut-"));
+	if (options.escapeWindowMs !== undefined) {
+		await writeFile(join(agentDir, REWIND_CONFIG_FILE), JSON.stringify({ escapeWindowMs: options.escapeWindowMs }));
+	}
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
+	const restore = () => {
+		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+	};
 
 	try {
 		const mock = new MockPi([]);
 		rewindExtension(mock as unknown as ExtensionAPI);
 		let terminalInputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
-		let editorText = "";
-		let idle = true;
+		const state = {
+			editorText: "", idle: true, editorFocused: true, menuFocused: false,
+			overlayOpen: false, autocompleteOpen: false, focusApiUnavailable: false,
+		};
 		const context = {
 			cwd: "/tmp/project",
 			mode: "tui",
 			hasUI: true,
-			isIdle: () => idle,
+			isIdle: () => state.idle,
 			isProjectTrusted: () => false,
 			ui: {
 				onTerminalInput: (handler: typeof terminalInputHandler) => {
 					terminalInputHandler = handler;
 					return () => {};
 				},
-				getEditorText: () => editorText,
+				// Pi reaches for this factory to render a widget, and the extension
+				// borrows the TUI instance from it to read the layout.
+				setWidget: (_key: string, content: unknown) => {
+					if (typeof content !== "function") return;
+					const editor = {
+						get focused() {
+							return state.editorFocused;
+						},
+						getText: () => state.editorText,
+						setText: () => {},
+						isShowingAutocomplete: () => state.autocompleteOpen,
+					};
+					// Real SettingsList receives input without exposing a focused flag.
+					const menu = new SettingsList([], 10, {
+						label: (text) => text, value: (text) => text, description: (text) => text,
+						cursor: ">", hint: (text) => text,
+					}, () => {}, () => {});
+					const overlay = { render: () => [], invalidate() {} };
+					(content as (tui: unknown, theme: unknown) => unknown)({
+						children: [{ children: [editor, menu] }],
+						get getFocusedComponent() {
+							return state.focusApiUnavailable ? undefined : () =>
+								state.overlayOpen ? overlay : state.menuFocused ? menu : state.editorFocused ? editor : null;
+						},
+						hasOverlay: () => state.overlayOpen,
+					}, {});
+				},
+				getEditorText: () => state.editorText,
 				setEditorText: (text: string) => {
-					editorText = text;
+					state.editorText = text;
 				},
 				notify: () => {},
 			},
@@ -100,16 +152,128 @@ test("turns double Escape into the rewind command", async () => {
 
 		await mock.emit("session_start", { type: "session_start", reason: "startup" }, context);
 		assert.ok(terminalInputHandler);
-		assert.equal(terminalInputHandler(""), undefined);
-		assert.deepEqual(terminalInputHandler(""), { data: "\r" });
-		assert.equal(editorText, "/rewind");
+		return { send: (data) => terminalInputHandler?.(data), state, restore };
+	} catch (error) {
+		restore();
+		throw error;
+	}
+}
 
-		idle = false;
-		editorText = "";
-		assert.equal(terminalInputHandler(""), undefined);
+test("turns double Escape into the rewind command", async () => {
+	const harness = await createShortcutHarness();
+	try {
+		assert.equal(harness.send(""), undefined);
+		assert.deepEqual(harness.send(""), { data: "\r" });
+		assert.equal(harness.state.editorText, "/rewind");
+
+		harness.state.idle = false;
+		harness.state.editorText = "";
+		assert.equal(harness.send(""), undefined);
 	} finally {
-		if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
-		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		harness.restore();
+	}
+});
+
+test("recognizes Escape encodings from modern terminals", async () => {
+	const harness = await createShortcutHarness();
+	try {
+		// Kitty reports Escape as CSI 27 u, which the old byte comparison never matched.
+		assert.equal(harness.send("[27u"), undefined);
+		assert.equal(harness.send("[27;1:3u"), undefined);
+		assert.deepEqual(harness.send("[27u"), { data: "\r" });
+		assert.equal(harness.state.editorText, "/rewind");
+
+		harness.state.editorText = "";
+		harness.send("a");
+
+		// A single Kitty press also reports a release: CSI 27 ; 1 : 3 u.
+		assert.equal(harness.send("[27u"), undefined);
+		assert.equal(harness.send("[27;1:3u"), undefined);
+		assert.equal(harness.state.editorText, "");
+
+		harness.send("a");
+
+		// Key repeat must not count as a second press either.
+		assert.equal(harness.send("[27u"), undefined);
+		assert.equal(harness.send("[27;1:2u"), undefined);
+		assert.equal(harness.state.editorText, "");
+	} finally {
+		harness.restore();
+	}
+});
+
+test("does not turn Escape presses that dismissed a menu into rewind", async () => {
+	const harness = await createShortcutHarness({ escapeWindowMs: 50 });
+	try {
+		// Escape with text in the editor is handed to the host, which is how a
+		// command menu is dismissed. Clearing the editor and pressing twice must
+		// not make that dismissal open rewind.
+		harness.state.editorText = "/exit";
+		assert.equal(harness.send("\x1b"), undefined);
+		harness.state.editorText = "";
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.state.editorText, "");
+
+		// Once the window has passed, a deliberate double press still works.
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.deepEqual(harness.send("\x1b"), { data: "\r" });
+		assert.equal(harness.state.editorText, "/rewind");
+	} finally {
+		harness.restore();
+	}
+});
+
+test("keeps Escape presses that close a menu from arming rewind", async () => {
+	const harness = await createShortcutHarness({ escapeWindowMs: 50 });
+	try {
+		// Pi moves focus to a menu such as the /settings selector, so the presses
+		// that close it belong to the host and must not open rewind.
+		harness.state.editorFocused = false;
+		harness.state.menuFocused = true;
+		assert.equal(harness.send("\x1b"), undefined);
+		harness.state.editorFocused = true;
+		harness.state.menuFocused = false;
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.state.editorText, "");
+
+		// With the editor focused again, a deliberate double press still works.
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.deepEqual(harness.send("\x1b"), { data: "\r" });
+		assert.equal(harness.state.editorText, "/rewind");
+	} finally {
+		harness.restore();
+	}
+});
+
+for (const condition of ["overlayOpen", "autocompleteOpen", "focusApiUnavailable"] as const) {
+	test(`does not arm rewind while ${condition} owns Escape`, async () => {
+		const harness = await createShortcutHarness();
+		try {
+			harness.state[condition] = true;
+			assert.equal(harness.send("\x1b"), undefined);
+			harness.state[condition] = false;
+			assert.equal(harness.send("\x1b"), undefined);
+			assert.equal(harness.send("\x1b"), undefined);
+			assert.equal(harness.state.editorText, "");
+		} finally {
+			harness.restore();
+		}
+	});
+}
+
+test("does not arm rewind when no component owns the keyboard", async () => {
+	const harness = await createShortcutHarness();
+	try {
+		harness.state.editorFocused = false;
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.state.editorText, "");
+	} finally {
+		harness.restore();
 	}
 });
 
