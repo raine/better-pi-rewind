@@ -84,6 +84,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 	let removeTerminalInputListener: (() => void) | undefined;
 	let lastEscapeTime = 0;
 	let lastEscapeWasActive = false;
+	let lastHostEscapeTime = 0;
 	let rewindUiOpen = false;
 	let config: RewindConfig = DEFAULT_REWIND_CONFIG;
 
@@ -132,6 +133,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 		removeTerminalInputListener?.();
 		lastEscapeTime = 0;
 		lastEscapeWasActive = false;
+		lastHostEscapeTime = 0;
 		try {
 			config = await loadRewindConfig({
 				agentDir,
@@ -154,21 +156,29 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 				lastEscapeTime = 0;
 				return undefined;
 			}
-			if (rewindUiOpen) {
+			const now = Date.now();
+			// A press the extension passes on belongs to a single-press host gesture,
+			// such as dismissing a command menu or cancelling a run. Arming a fresh
+			// double press right after one turns a run of dismissal presses into
+			// rewind, so note the time and stay out of the way for one window.
+			const hostHandles = () => {
 				lastEscapeTime = 0;
+				lastHostEscapeTime = now;
+			};
+			if (rewindUiOpen) {
+				hostHandles();
 				return undefined;
 			}
 
-			const now = Date.now();
 			const active = !ctx.isIdle();
 			const isDoubleEscape = now - lastEscapeTime < config.escapeWindowMs && lastEscapeWasActive === active;
 			if (active) {
 				if (config.activeRunEscapePresses === 1) {
-					lastEscapeTime = 0;
+					hostHandles();
 					return undefined;
 				}
 				if (isDoubleEscape) {
-					lastEscapeTime = 0;
+					hostHandles();
 					return undefined;
 				}
 				lastEscapeTime = now;
@@ -176,8 +186,8 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 				return { consume: true };
 			}
 
-			if (ctx.ui.getEditorText().trim()) {
-				lastEscapeTime = 0;
+			if (ctx.ui.getEditorText().trim() || now - lastHostEscapeTime < config.escapeWindowMs) {
+				hostHandles();
 				return undefined;
 			}
 			if (!isDoubleEscape) {

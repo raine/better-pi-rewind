@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
 import rewindExtension from "../extensions/rewind.ts";
+import { REWIND_CONFIG_FILE } from "../src/config.ts";
 import { REWIND_ENTRY_TYPE, type CheckpointRecord } from "../src/types.ts";
 
 type Handler = (event: any, context: any) => Promise<any> | any;
@@ -69,8 +70,11 @@ interface ShortcutHarness {
 	restore: () => void;
 }
 
-async function createShortcutHarness(): Promise<ShortcutHarness> {
+async function createShortcutHarness(options: { escapeWindowMs?: number } = {}): Promise<ShortcutHarness> {
 	const agentDir = await mkdtemp(join(tmpdir(), "better-pi-rewind-shortcut-"));
+	if (options.escapeWindowMs !== undefined) {
+		await writeFile(join(agentDir, REWIND_CONFIG_FILE), JSON.stringify({ escapeWindowMs: options.escapeWindowMs }));
+	}
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = agentDir;
 	const restore = () => {
@@ -154,6 +158,29 @@ test("recognizes Escape encodings from modern terminals", async () => {
 		assert.equal(harness.send("[27u"), undefined);
 		assert.equal(harness.send("[27;1:2u"), undefined);
 		assert.equal(harness.state.editorText, "");
+	} finally {
+		harness.restore();
+	}
+});
+
+test("does not turn Escape presses that dismissed a menu into rewind", async () => {
+	const harness = await createShortcutHarness({ escapeWindowMs: 50 });
+	try {
+		// Escape with text in the editor is handed to the host, which is how a
+		// command menu is dismissed. Clearing the editor and pressing twice must
+		// not make that dismissal open rewind.
+		harness.state.editorText = "/exit";
+		assert.equal(harness.send("\x1b"), undefined);
+		harness.state.editorText = "";
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.state.editorText, "");
+
+		// Once the window has passed, a deliberate double press still works.
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.deepEqual(harness.send("\x1b"), { data: "\r" });
+		assert.equal(harness.state.editorText, "/rewind");
 	} finally {
 		harness.restore();
 	}
