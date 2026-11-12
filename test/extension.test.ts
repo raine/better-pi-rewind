@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type { ExtensionAPI, SessionEntry, Theme } from "@earendil-works/pi-coding-agent";
+import { SettingsList } from "@earendil-works/pi-tui";
 import rewindExtension from "../extensions/rewind.ts";
 import { REWIND_CONFIG_FILE } from "../src/config.ts";
 import { REWIND_ENTRY_TYPE, type CheckpointRecord } from "../src/types.ts";
@@ -66,7 +67,15 @@ class MockPi {
 
 interface ShortcutHarness {
 	send: (data: string) => { consume?: boolean; data?: string } | undefined;
-	state: { editorText: string; idle: boolean; editorFocused: boolean; menuFocused: boolean };
+	state: {
+		editorText: string;
+		idle: boolean;
+		editorFocused: boolean;
+		menuFocused: boolean;
+		overlayOpen: boolean;
+		autocompleteOpen: boolean;
+		focusApiUnavailable: boolean;
+	};
 	restore: () => void;
 }
 
@@ -86,7 +95,10 @@ async function createShortcutHarness(options: { escapeWindowMs?: number } = {}):
 		const mock = new MockPi([]);
 		rewindExtension(mock as unknown as ExtensionAPI);
 		let terminalInputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
-		const state = { editorText: "", idle: true, editorFocused: true, menuFocused: false };
+		const state = {
+			editorText: "", idle: true, editorFocused: true, menuFocused: false,
+			overlayOpen: false, autocompleteOpen: false, focusApiUnavailable: false,
+		};
 		const context = {
 			cwd: "/tmp/project",
 			mode: "tui",
@@ -108,13 +120,22 @@ async function createShortcutHarness(options: { escapeWindowMs?: number } = {}):
 						},
 						getText: () => state.editorText,
 						setText: () => {},
+						isShowingAutocomplete: () => state.autocompleteOpen,
 					};
-					const menu = {
-						get focused() {
-							return state.menuFocused;
+					// Real SettingsList receives input without exposing a focused flag.
+					const menu = new SettingsList([], 10, {
+						label: (text) => text, value: (text) => text, description: (text) => text,
+						cursor: ">", hint: (text) => text,
+					}, () => {}, () => {});
+					const overlay = { render: () => [], invalidate() {} };
+					(content as (tui: unknown, theme: unknown) => unknown)({
+						children: [{ children: [editor, menu] }],
+						get getFocusedComponent() {
+							return state.focusApiUnavailable ? undefined : () =>
+								state.overlayOpen ? overlay : state.menuFocused ? menu : state.editorFocused ? editor : null;
 						},
-					};
-					(content as (tui: unknown, theme: unknown) => unknown)({ children: [{ children: [editor, menu] }] }, {});
+						hasOverlay: () => state.overlayOpen,
+					}, {});
 				},
 				getEditorText: () => state.editorText,
 				setEditorText: (text: string) => {
@@ -223,6 +244,34 @@ test("keeps Escape presses that close a menu from arming rewind", async () => {
 		assert.equal(harness.send("\x1b"), undefined);
 		assert.deepEqual(harness.send("\x1b"), { data: "\r" });
 		assert.equal(harness.state.editorText, "/rewind");
+	} finally {
+		harness.restore();
+	}
+});
+
+for (const condition of ["overlayOpen", "autocompleteOpen", "focusApiUnavailable"] as const) {
+	test(`does not arm rewind while ${condition} owns Escape`, async () => {
+		const harness = await createShortcutHarness();
+		try {
+			harness.state[condition] = true;
+			assert.equal(harness.send("\x1b"), undefined);
+			harness.state[condition] = false;
+			assert.equal(harness.send("\x1b"), undefined);
+			assert.equal(harness.send("\x1b"), undefined);
+			assert.equal(harness.state.editorText, "");
+		} finally {
+			harness.restore();
+		}
+	});
+}
+
+test("does not arm rewind when no component owns the keyboard", async () => {
+	const harness = await createShortcutHarness();
+	try {
+		harness.state.editorFocused = false;
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.state.editorText, "");
 	} finally {
 		harness.restore();
 	}

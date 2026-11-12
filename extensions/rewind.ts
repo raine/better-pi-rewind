@@ -41,39 +41,11 @@ import {
 } from "../src/types.ts";
 
 const FOCUS_PROBE_WIDGET = "better-pi-rewind-focus-probe";
-const FOCUS_WALK_DEPTH = 24;
 
-/** The parts of a rendered component this extension inspects. */
-interface FocusableNode {
-	focused?: boolean;
+interface EscapeOwner {
 	getText?: unknown;
 	setText?: unknown;
-	children?: FocusableNode[];
-}
-
-interface KeyboardOwner {
-	focused: boolean;
-	editor: boolean;
-}
-
-function ownsKeyboard(node: FocusableNode): boolean {
-	return node.focused === true && typeof node.getText === "function" && typeof node.setText === "function";
-}
-
-/** Walk the rendered layout and report whether a component, and which one, holds focus. */
-function keyboardOwner(node: FocusableNode, depth = 0): KeyboardOwner {
-	const focused = node.focused === true;
-	const editor = ownsKeyboard(node);
-	if (depth >= FOCUS_WALK_DEPTH) return { focused, editor };
-	let anyFocused = focused;
-	let anyEditor = editor;
-	for (const child of Array.isArray(node.children) ? node.children : []) {
-		if (!child) continue;
-		const nested = keyboardOwner(child, depth + 1);
-		anyFocused ||= nested.focused;
-		anyEditor ||= nested.editor;
-	}
-	return { focused: anyFocused, editor: anyEditor };
+	isShowingAutocomplete?: () => boolean;
 }
 
 interface RuntimeState {
@@ -121,7 +93,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 	let lastEscapeTime = 0;
 	let lastEscapeWasActive = false;
 	let lastHostEscapeTime = 0;
-	let keyboardOwnerLookup: (() => KeyboardOwner) | undefined;
+	let hostOwnsEscape: (() => boolean) | undefined;
 	let rewindUiOpen = false;
 	let config: RewindConfig = DEFAULT_REWIND_CONFIG;
 
@@ -184,21 +156,22 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 			ctx.ui.notify(`better-pi-rewind: ${message}`, "warning");
 		}
 		if (ctx.mode !== "tui") return;
-		// Pi hands the keyboard to a menu, selector, or dialog by moving focus off
-		// the editor, which leaves the editor in the layout or replaces it. The
-		// extension API reports no focus information, and a widget factory is the
-		// one place that receives the TUI instance, so register a throwaway widget,
-		// keep the reference, and remove the widget again.
-		keyboardOwnerLookup = undefined;
+		// Widget factories expose the TUI; menu owners need not have a focused flag.
+		hostOwnsEscape = undefined;
 		try {
 			ctx.ui.setWidget(FOCUS_PROBE_WIDGET, (tui) => {
-				const root = tui as unknown as FocusableNode;
-				keyboardOwnerLookup = () => keyboardOwner(root);
+				const focusTui = tui as typeof tui & { getFocusedComponent?: () => EscapeOwner | null };
+				hostOwnsEscape = () => {
+					const owner = focusTui.getFocusedComponent?.();
+					// shortcut: editor methods identify the prompt; use identity if the host exposes it.
+					return !owner || typeof owner.getText !== "function" || typeof owner.setText !== "function"
+						|| tui.hasOverlay() || owner.isShowingAutocomplete?.() === true;
+				};
 				return { render: () => [], invalidate: () => {} };
 			});
 			ctx.ui.setWidget(FOCUS_PROBE_WIDGET, undefined);
 		} catch {
-			keyboardOwnerLookup = undefined;
+			hostOwnsEscape = undefined;
 		}
 		removeTerminalInputListener = ctx.ui.onTerminalInput((data) => {
 			// Releases and auto-repeat are not presses, but they must not clear a
@@ -239,12 +212,7 @@ export default function rewindExtension(pi: ExtensionAPI): void {
 				return { consume: true };
 			}
 
-			// The editor holds the keyboard only in the idle case. When a menu,
-			// selector, or dialog holds it, the press is the host's to spend, and it
-			// must not arm a double press either.
-			const owner = keyboardOwnerLookup?.() ?? { focused: false, editor: true };
-			const hostHoldsKeyboard = owner.focused && !owner.editor;
-			if (ctx.ui.getEditorText().trim() || hostHoldsKeyboard || now - lastHostEscapeTime < config.escapeWindowMs) {
+			if (ctx.ui.getEditorText().trim() || (hostOwnsEscape?.() ?? true) || now - lastHostEscapeTime < config.escapeWindowMs) {
 				hostHandles();
 				return undefined;
 			}
