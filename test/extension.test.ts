@@ -66,7 +66,7 @@ class MockPi {
 
 interface ShortcutHarness {
 	send: (data: string) => { consume?: boolean; data?: string } | undefined;
-	state: { editorText: string; idle: boolean };
+	state: { editorText: string; idle: boolean; editorFocused: boolean; menuFocused: boolean };
 	restore: () => void;
 }
 
@@ -86,7 +86,7 @@ async function createShortcutHarness(options: { escapeWindowMs?: number } = {}):
 		const mock = new MockPi([]);
 		rewindExtension(mock as unknown as ExtensionAPI);
 		let terminalInputHandler: ((data: string) => { consume?: boolean; data?: string } | undefined) | undefined;
-		const state = { editorText: "", idle: true };
+		const state = { editorText: "", idle: true, editorFocused: true, menuFocused: false };
 		const context = {
 			cwd: "/tmp/project",
 			mode: "tui",
@@ -97,6 +97,24 @@ async function createShortcutHarness(options: { escapeWindowMs?: number } = {}):
 				onTerminalInput: (handler: typeof terminalInputHandler) => {
 					terminalInputHandler = handler;
 					return () => {};
+				},
+				// Pi reaches for this factory to render a widget, and the extension
+				// borrows the TUI instance from it to read the layout.
+				setWidget: (_key: string, content: unknown) => {
+					if (typeof content !== "function") return;
+					const editor = {
+						get focused() {
+							return state.editorFocused;
+						},
+						getText: () => state.editorText,
+						setText: () => {},
+					};
+					const menu = {
+						get focused() {
+							return state.menuFocused;
+						},
+					};
+					(content as (tui: unknown, theme: unknown) => unknown)({ children: [{ children: [editor, menu] }] }, {});
 				},
 				getEditorText: () => state.editorText,
 				setEditorText: (text: string) => {
@@ -177,6 +195,30 @@ test("does not turn Escape presses that dismissed a menu into rewind", async () 
 		assert.equal(harness.state.editorText, "");
 
 		// Once the window has passed, a deliberate double press still works.
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.deepEqual(harness.send("\x1b"), { data: "\r" });
+		assert.equal(harness.state.editorText, "/rewind");
+	} finally {
+		harness.restore();
+	}
+});
+
+test("keeps Escape presses that close a menu from arming rewind", async () => {
+	const harness = await createShortcutHarness({ escapeWindowMs: 50 });
+	try {
+		// Pi moves focus to a menu such as the /settings selector, so the presses
+		// that close it belong to the host and must not open rewind.
+		harness.state.editorFocused = false;
+		harness.state.menuFocused = true;
+		assert.equal(harness.send("\x1b"), undefined);
+		harness.state.editorFocused = true;
+		harness.state.menuFocused = false;
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.send("\x1b"), undefined);
+		assert.equal(harness.state.editorText, "");
+
+		// With the editor focused again, a deliberate double press still works.
 		await new Promise((resolve) => setTimeout(resolve, 100));
 		assert.equal(harness.send("\x1b"), undefined);
 		assert.deepEqual(harness.send("\x1b"), { data: "\r" });
